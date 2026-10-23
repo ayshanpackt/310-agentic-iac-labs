@@ -4,3 +4,5 @@
 *.tfstate.*
 *.tfplan
 tfplan.json
+stage2-off/
+stage2-on/

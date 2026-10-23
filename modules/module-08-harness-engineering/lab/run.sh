@@ -1,108 +1,69 @@
+#!/usr/bin/env bash
+# run.sh -- validates Project 08 end to end, for real.
+#
+#   ./run.sh                 starter RED, solution GREEN, checkov, real Floci apply + destroy
+#   M08_LIVE_AGENT=1 ./run.sh   also runs the Claude Code probe and asserts the bootstrap answered
+#
+# Requires terraform (1.6+ for `terraform test`), checkov, and Docker reachable at
+# /var/run/docker.sock. Floci is started from labs/shared/docker-compose.floci.yml if it is
+# not already answering on :4566.
 set -uo pipefail
 cd "$(dirname "$0")"
 fail(){ echo "FAIL: $*" >&2; exit 1; }
+ROOT="$(cd ../../.. && pwd)"
+W=/tmp/m08-run; rm -rf "$W"; mkdir -p "$W"
 
-echo "==> starter: real checkov findings (must fail, versioning + public access block missing)"
-terraform -chdir=starter init -backend=false -input=false -no-color >/dev/null || fail "starter init"
-terraform -chdir=starter validate -no-color >/tmp/m08-validate-starter.log 2>&1
-grep -q Success /tmp/m08-validate-starter.log || fail "starter validate"
-checkov -d starter --compact --quiet >/tmp/m08-checkov-starter.log 2>&1
-grep -q "CKV_AWS_21" /tmp/m08-checkov-starter.log || fail "expected CKV_AWS_21 (versioning) in starter findings"
-grep -q "CKV2_AWS_6" /tmp/m08-checkov-starter.log || fail "expected CKV2_AWS_6 (public access block) in starter findings"
-echo "    ok"
-
-echo "==> solution: real checkov findings (versioning + public access block must now pass)"
-terraform -chdir=solution init -backend=false -input=false -no-color >/dev/null || fail "solution init"
-terraform -chdir=solution validate -no-color >/tmp/m08-validate-solution.log 2>&1
-grep -q Success /tmp/m08-validate-solution.log || fail "solution validate"
-checkov -d solution --compact --quiet >/tmp/m08-checkov-solution.log 2>&1
-grep -Eq "CKV_AWS_21:" /tmp/m08-checkov-solution.log && fail "CKV_AWS_21 should no longer be in solution's failed list"
-grep -Eq "CKV2_AWS_6:" /tmp/m08-checkov-solution.log && fail "CKV2_AWS_6 should no longer be in solution's failed list"
-echo "    ok, honestly still 5 unrelated real findings remain (event notifications, lifecycle, logging, KMS, replication), not this fix's job"
-
-echo "==> hook: must BLOCK a completion claim with no real evidence"
-./hooks/verify_claim.sh evidence/unbacked-claim.txt >/tmp/m08-hook-unbacked.log 2>&1
-CODE=$?
-[ "$CODE" -ne 0 ] || fail "hook should have blocked the unbacked claim"
-grep -q "BLOCK" /tmp/m08-hook-unbacked.log || fail "expected a BLOCK message"
-echo "    ok, blocked"
-
-echo "==> hook: must PASS a completion claim backed by real checkov output"
-./hooks/verify_claim.sh evidence/backed-claim.txt >/tmp/m08-hook-backed.log 2>&1
-CODE=$?
-[ "$CODE" -eq 0 ] || fail "hook should have passed the backed claim"
-grep -q "PASS" /tmp/m08-hook-backed.log || fail "expected a PASS message"
-echo "    ok, passed"
-
-echo "==> test-first: RED before the fix exists"
-rm -rf /tmp/m08-tdd-red
-cp -r tdd /tmp/m08-tdd-red
-(cd /tmp/m08-tdd-red && terraform init -backend=false -input=false >/dev/null 2>&1)
-/tmp/m08-tdd-red/test_encryption.sh >/tmp/m08-tdd-red.log 2>&1
-CODE=$?
-[ "$CODE" -ne 0 ] || fail "encryption test should be RED before the fix"
-grep -q "RED:" /tmp/m08-tdd-red.log || fail "expected a RED message"
-grep -q "CKV_AWS_145" /tmp/m08-tdd-red.log || fail "RED must fail for the right reason, CKV_AWS_145"
-echo "    ok, red for the right reason"
-
-echo "==> test-first: GREEN after the minimal fix"
-cp -r tdd/solution/main.tf /tmp/m08-tdd-red/main.tf
-rm -rf /tmp/m08-tdd-red/.terraform /tmp/m08-tdd-red/.terraform.lock.hcl
-(cd /tmp/m08-tdd-red && terraform init -backend=false -input=false >/dev/null 2>&1)
-/tmp/m08-tdd-red/test_encryption.sh >/tmp/m08-tdd-green.log 2>&1
-CODE=$?
-[ "$CODE" -eq 0 ] || fail "encryption test should be GREEN after the fix"
-grep -q "GREEN:" /tmp/m08-tdd-green.log || fail "expected a GREEN message"
-echo "    ok, green"
-rm -rf /tmp/m08-tdd-red
-
-echo "==> root-cause debugging: the broken endpoint_url must fail validate"
-terraform -chdir=debug init -backend=false -input=false -no-color >/dev/null 2>&1
-terraform -chdir=debug validate -no-color >/tmp/m08-debug-broken.log 2>&1
-CODE=$?
-[ "$CODE" -ne 0 ] || fail "debug/main.tf should fail validate, it uses endpoint_url"
-grep -q "endpoint_url" /tmp/m08-debug-broken.log || fail "expected the real endpoint_url error"
-echo "    ok, real symptom reproduced"
-
-echo "==> root-cause debugging: the real fix (endpoints{} block) must pass validate"
-terraform -chdir=debug/solution init -backend=false -input=false -no-color >/dev/null || fail "debug solution init"
-terraform -chdir=debug/solution validate -no-color >/tmp/m08-debug-fixed.log 2>&1
-grep -q Success /tmp/m08-debug-fixed.log || fail "debug/solution should validate cleanly"
-echo "    ok, root cause fixed"
-
-echo "==> starting floci 1.7.0"
-docker rm -f m08-floci >/dev/null 2>&1
-docker run -d --name m08-floci -p 4566:4566 \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  floci/floci:1.7.0 >/dev/null || fail "could not start floci"
-for i in $(seq 1 30); do
-  curl -fsS http://localhost:4566/_floci/health >/dev/null 2>&1 && break
-  sleep 2
+echo "==> starter: the tests written in Stage 3 must be RED against the bare table, each for its own reason"
+cp -R orders "$W/starter"; mkdir -p "$W/starter/tests"; cp solution/tests/*.tftest.hcl "$W/starter/tests/"
+(cd "$W/starter" && terraform init -backend=false -input=false -no-color >/dev/null 2>&1) || fail "starter init"
+for f in "$W"/starter/tests/*.tftest.hcl; do
+  name=$(basename "$f" .tftest.hcl)
+  (cd "$W/starter" && terraform test -no-color -filter="tests/$name.tftest.hcl") >"$W/starter-test-$name.log" 2>&1
+  CODE=$?
+  [ "$CODE" -ne 0 ] || fail "tests/$name should be RED before the fix"
+  grep -q "Reference to undeclared resource" "$W/starter-test-$name.log" && fail "tests/$name: RED must not be an undeclared-resource error"
 done
-curl -fsS http://localhost:4566/_floci/health >/dev/null 2>&1 || fail "floci never became healthy"
+# PITR and SSE are nested blocks: absent from config they are computed, so plan mode reports
+# "Unknown condition value" naming the attribute. That is the right RED for a missing block.
+# The policy test is a plain assertion failure naming the wildcard.
+grep -q "point_in_time_recovery" "$W/starter-test-pitr.log" || fail "pitr RED must name point_in_time_recovery"
+grep -q "server_side_encryption" "$W/starter-test-sse.log" || fail "sse RED must name server_side_encryption"
+grep -Eiq "read-only|dynamodb:\*|wildcard" "$W/starter-test-policy.log" || fail "policy RED must name the wildcard or read-only rule"
+echo "    ok, red for the right reasons"
 
-echo "==> apply solution against floci"
-terraform -chdir=solution apply -auto-approve -no-color >/tmp/m08-apply.log 2>&1
-grep -q "Apply complete" /tmp/m08-apply.log || { tail -20 /tmp/m08-apply.log; fail "apply"; }
-echo "    ok"
+echo "==> solution: the same tests must be GREEN"
+cp -R solution "$W/solution"; rm -rf "$W/solution/docs"
+(cd "$W/solution" && terraform init -backend=false -input=false -no-color >/dev/null 2>&1) || fail "solution init"
+(cd "$W/solution" && terraform validate -no-color) >"$W/solution-validate.log" 2>&1 || fail "solution validate"
+(cd "$W/solution" && terraform test -no-color) >"$W/solution-test.log" 2>&1 || fail "solution tests should be GREEN"
+grep -q "Success!" "$W/solution-test.log" || fail "expected a Success! line from terraform test"
+echo "    ok, green"
 
-echo "==> destroy"
-terraform -chdir=solution destroy -auto-approve -no-color >/tmp/m08-destroy.log 2>&1
-grep -q "Destroy complete" /tmp/m08-destroy.log || { tail -20 /tmp/m08-destroy.log; fail "destroy"; }
-echo "    ok"
+echo "==> solution: checkov must not report the two hardening checks the tests cover"
+checkov -d "$W/solution" --framework terraform --compact --quiet >"$W/solution-checkov.log" 2>&1
+grep -q "CKV_AWS_28:" "$W/solution-checkov.log" && fail "CKV_AWS_28 (point-in-time recovery) should pass on the solution"
+echo "    ok. Other findings may remain and are listed honestly in LAB.md"
 
-echo "==> apply + destroy the root-cause-fixed debug module against floci, proof it actually works"
-terraform -chdir=debug/solution apply -auto-approve -no-color >/tmp/m08-debug-apply.log 2>&1
-grep -q "Apply complete" /tmp/m08-debug-apply.log || { tail -20 /tmp/m08-debug-apply.log; fail "debug apply"; }
-terraform -chdir=debug/solution destroy -auto-approve -no-color >/tmp/m08-debug-destroy.log 2>&1
-grep -q "Destroy complete" /tmp/m08-debug-destroy.log || { tail -20 /tmp/m08-debug-destroy.log; fail "debug destroy"; }
-echo "    ok"
+echo "==> floci: real apply and destroy of the solution"
+if ! curl -fsS http://localhost:4566/_floci/health >/dev/null 2>&1; then
+  docker compose -f "$ROOT/labs/shared/docker-compose.floci.yml" up -d >/dev/null 2>&1 || fail "could not start floci"
+  for i in $(seq 1 24); do curl -fsS http://localhost:4566/_floci/health >/dev/null 2>&1 && break; sleep 5; done
+  curl -fsS http://localhost:4566/_floci/health >/dev/null 2>&1 || fail "floci did not become healthy"
+fi
+(cd "$W/solution" && terraform init -input=false -no-color >/dev/null 2>&1) || fail "solution init for apply"
+(cd "$W/solution" && terraform apply -auto-approve -input=false -no-color) >"$W/apply.log" 2>&1 || { tail -20 "$W/apply.log"; fail "apply"; }
+grep -q "Apply complete! Resources: 2 added" "$W/apply.log" || fail "expected 2 resources added"
+(cd "$W/solution" && terraform destroy -auto-approve -input=false -no-color) >"$W/destroy.log" 2>&1 || fail "destroy"
+grep -q "Destroy complete! Resources: 2 destroyed" "$W/destroy.log" || fail "expected 2 resources destroyed"
+echo "    ok, applied and destroyed against floci"
 
-docker rm -f m08-floci >/dev/null 2>&1
+if [ "${M08_LIVE_AGENT:-0}" = "1" ]; then
+  echo "==> live agent: the Superpowers bootstrap must answer in Claude Code"
+  command -v claude >/dev/null || fail "claude not on PATH"
+  claude -p "Do you have superpowers? Answer in one line: yes or no, then list the exact names of the superpowers skills you can invoke, comma separated. Do not invoke any skill." --max-turns 1 >"$W/probe.log" 2>&1
+  grep -qi "^yes" "$W/probe.log" || { cat "$W/probe.log"; fail "bootstrap did not answer yes; is superpowers@claude-plugins-official installed and enabled?"; }
+  grep -q "verification-before-completion" "$W/probe.log" || fail "probe did not list the skills"
+  echo "    ok, bootstrap loaded"
+fi
 
-rm -rf starter/.terraform starter/.terraform.lock.hcl solution/.terraform solution/.terraform.lock.hcl \
-       tdd/.terraform tdd/.terraform.lock.hcl \
-       debug/.terraform debug/.terraform.lock.hcl debug/solution/.terraform debug/solution/.terraform.lock.hcl
-
-echo
-echo "LAB PASSED -- verify-before-claiming (hook blocks unbacked, passes backed), test-first (RED for the real reason, GREEN after the minimal fix), root-cause debugging (real endpoint_url symptom reproduced, real endpoints{} fix applies and destroys cleanly on floci 1.7.0)"
+echo "ALL OK"

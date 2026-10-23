@@ -1,0 +1,12 @@
+$ codex plugin marketplace add anthropics/claude-plugins-official
+Added marketplace `claude-plugins-official` from https://github.com/anthropics/claude-plugins-official.git.
+Installed marketplace root: /private/tmp/claude-501/-Users-gshah-work-courses-310/644538dc-5f4e-4aa5-8aab-99b7d643f237/scratchpad/learner-home/.codex/.tmp/marketplaces/claude-plugins-official
+
+$ codex plugin add superpowers@claude-plugins-official
+Added plugin `superpowers` from marketplace `claude-plugins-official`.
+Installed plugin root: /private/tmp/claude-501/-Users-gshah-work-courses-310/644538dc-5f4e-4aa5-8aab-99b7d643f237/scratchpad/learner-home/.codex/plugins/cache/claude-plugins-official/superpowers/7.0.0
+
+$ codex plugin list
+PLUGIN                                                                         STATUS              VERSION  SOURCE
+superpowers@claude-plugins-official                                            installed, enabled  7.0.0    https://github.com/obra/superpowers.git, sha `bb92a77741419a4ab5f06e711a283343f1ada0c3`
+PLUGIN                                                               STATUS              VERSION                                             SOURCE

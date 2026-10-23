@@ -1,0 +1,30 @@
+ 1. Skill  iac-verification
+ 2. Bash   ls -la && cat *.tf && ls ../../evidence 2>/dev/null | head -50 && cat CLAUDE.md 2>/dev/null; cat ../
+ 3. Bash   ls -la /Users/gshah/work/courses/310-packt/modules/module-08-harness-engineering/lab/orders
+ 4. Bash   ls /Users/gshah/work/courses/310-packt/modules/module-08-harness-engineering/lab/evidence /Users/gsh
+ 5. Bash   git -C /Users/gshah/work/courses/310-packt/modules/module-08-harness-engineering/lab/orders show --s
+ 6. Read   /Users/gshah/work/courses/310-packt/modules/module-08-harness-engineering/lab/orders/provider.tf
+ 7. Read   /Users/gshah/work/courses/310-packt/modules/module-08-harness-engineering/lab/orders/main.tf
+ 8. Read   /Users/gshah/work/courses/310-packt/modules/module-08-harness-engineering/lab/orders/terraform.tfsta
+ 9. Bash   ls -R /Users/gshah/work/courses/310-packt/modules/module-08-harness-engineering/lab/orders/docs /Use
+10. Bash   curl -s -m 5 -o /dev/null -w '%{http_code}\n' http://localhost:4566/_localstack/health || curl -s -m
+11. Bash   curl -s -m 5 -o /dev/null -w '%{http_code}\n' http://localhost:4566/
+12. Bash   terraform apply -auto-approve -no-color 2>&1 | tail -40
+13. Bash   terraform destroy -auto-approve -no-color 2>&1 | tail -15
+
+--- final answer ---
+Done. The orders module was applied against Floci and then destroyed, both in this session.
+
+Apply:
+
+```
+Apply complete! Resources: 2 added, 0 changed, 0 destroyed.
+```
+
+Destroy:
+
+```
+Destroy complete! Resources: 2 destroyed.
+```
+
+The two resources were the checkout-orders DynamoDB table and the checkout-orders-access IAM policy. Floci is back to the state it was in before the run, and the local state file holds no resources.

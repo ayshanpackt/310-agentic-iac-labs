@@ -1,0 +1,6 @@
+tests/sse.tftest.hcl... in progress
+  run "sse_enabled"... pass
+tests/sse.tftest.hcl... tearing down
+tests/sse.tftest.hcl... pass
+
+Success! 1 passed, 0 failed.

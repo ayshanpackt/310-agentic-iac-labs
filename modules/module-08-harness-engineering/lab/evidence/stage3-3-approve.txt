@@ -1,0 +1,50 @@
+  The approved design sits beside it in docs/superpowers/specs/. Both are gitignored by
+  the lab's docs/ rule, as noted before.                                                 12 files changed -414                                                ✕
+
+  What the plan contains. Four tasks. The first three are one property each, in the      …rness-engineering/lab/.claude/settings.local.example.json         -14
+  order you listed: point-in-time recovery, encryption, read-only policy. Each writes    modules/module-08-harness-engineering/lab/debug/main.tf            -29
+  its own terraform test file, watches it fail for the stated reason, makes the minimal  …/module-08-harness-engineering/lab/debug/solution/main.tf         -31
+  edit, watches it pass, and commits. The fourth runs every gate for real: the full      …dule-08-harness-engineering/lab/evidence/backed-claim.txt          -6
+  suite, checkov, apply against Floci, a read-back of both flags from state, a no-drift  …le-08-harness-engineering/lab/evidence/unbacked-claim.txt          -1
+  plan, and destroy, with each output captured to the lab's evidence/ directory.         …s/module-08-harness-engineering/lab/hooks/verify_claim.sh         -30
+                                                                                         modules/module-08-harness-engineering/lab/run.sh                  -108
+  Two things I learned from a throwaway run that changed the plan. They are now in the   modules/module-08-harness-engineering/lab/solution/main.tf         -56
+  design doc too.                                                                        ↓ 4 more below (opt+↓ to scroll)
+
+  - A failing run block makes terraform test skip the rest of its file, so each property ──────────────────────────────────────────────────────────────────────
+    gets its own test file rather than sharing one.                                      modules/module-08-harness-engineering/lab/.claude/settings.local.examp
+  - Checkov's CKV_AWS_119 keeps failing after the change, because it demands a           le.json
+    customer-managed key. The plan records it as an expected, accepted finding. Checkov  ──────────────────────────────────────────────────────────────────────
+    never flagged dynamodb:* at all, so terraform test is the real gate for the policy.    1 -{
+                                                                                           2 -  "hooks": {
+  Checkov counts, before and after the change:                                             3 -    "Stop": [
+                                                                                           4 -      {
+  ┌────────┬────────┬────────┐                                                             5 -        "hooks": [
+  │        │ Passed │ Failed │                                                             6 -          {
+  ├────────┼────────┼────────┤                                                             7 -            "type": "command",
+  │ Before │ 15     │ 2      │                                                             8 -            "command": "bash .claude/hooks/verify_claim.sh \"$CLA
+  ├────────┼────────┼────────┤                                                               -UDE_TRANSCRIPT_PATH\""
+  │ After  │ 16     │ 1      │                                                             9 -          }
+  └────────┴────────┴────────┘                                                            10 -        ]
+                                                                                          11 -      }
+  Floci is running with DynamoDB up, so the apply and destroy steps can run as written.   12 -    ]
+                                                                                          13 -  }
+  Please review the plan. Which execution approach would you prefer?                      14 -}
+                                                                                           0
+  - Subagent-driven: a fresh subagent implements each task and a fresh reviewer checks
+    it before the next starts, then a whole-branch review at the end. Most thorough,     ──────────────────────────────────────────────────────────────────────
+    costs a fresh context per task and per review.                                       modules/module-08-harness-engineering/lab/debug/main.tf
+  - Native: I implement every task myself in this session, then one fresh reviewer       ──────────────────────────────────────────────────────────────────────
+    checks the whole branch. Cheapest and fastest, no independent review until the end.    1 -# Lab 8 debugging exercise -- broken. Uses the argument name Floc
+                                                                                             -i's own
+  For this plan I recommend Native, because the four tasks are small, touch one file       2 -# README shows (`endpoint_url`), which is not real AWS-provider s
+  plus a test each, and the throwaway run already confirmed the exact RED and GREEN          -yntax. This
+  outputs, so a shipped mistake would cost a few lines of HCL. Does the plan capture       3 -# is a genuine, reproducible mistake, not a staged typo.
+  what you want, and which approach should we use?                                         4 -terraform {
+                                                                                           5 -  required_version = ">= 1.6"
+✻ Cooked for 4m 50s · done 12:00 AM                                                        6 -  required_providers {
+                                                                                                               Update available! Run: brew upgrade claude-code
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ accept edits on (shift+tab to cycle)

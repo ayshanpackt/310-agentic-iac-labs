@@ -1,0 +1,50 @@
+  Rulings I made
+                                                                                         12 files changed -414                                                ✕
+  - Setup: no git worktree, work in place on a branch. The module was untracked and
+    Floci and the evidence directory are local. Cost if wrong: uncommitted edits on a    …rness-engineering/lab/.claude/settings.local.example.json         -14
+    shared checkout, recoverable by git.                                                 modules/module-08-harness-engineering/lab/debug/main.tf            -29
+  - Pre-existing uncommitted deletions of tracked lab files (the old run.sh, hooks/,     …/module-08-harness-engineering/lab/debug/solution/main.tf         -31
+    starter/, tdd/, debug/, and others) were in the tree before this session and are     …dule-08-harness-engineering/lab/evidence/backed-claim.txt          -6
+    outside the range. Every commit here used explicit paths, never -a. Cost if wrong:   …le-08-harness-engineering/lab/evidence/unbacked-claim.txt          -1
+    none from this branch, but a git commit -a by anyone later would delete the old lab. …s/module-08-harness-engineering/lab/hooks/verify_claim.sh         -30
+  - The pre-existing .gitignore edit that hides docs/ is yours. It is why the spec and   modules/module-08-harness-engineering/lab/run.sh                  -108
+    plan are untracked. Cost if wrong: the design docs vanish if the checkout is         modules/module-08-harness-engineering/lab/solution/main.tf         -56
+    cleaned.                                                                             ↓ 4 more below (opt+↓ to scroll)
+  - Untracked stage evidence files and first-actions.py are unrelated and were left
+    alone.                                                                               ──────────────────────────────────────────────────────────────────────
+  - No assert on effect = "Allow". A Deny only tightens access.                          modules/module-08-harness-engineering/lab/.claude/settings.local.examp
+  - Floci's drift exit 0 proves the flags are stored, not that recovery works. The spec  le.json
+    names Floci as the target.                                                           ──────────────────────────────────────────────────────────────────────
+  - The policy is attached to no role. The spec scopes out attachment.                     1 -{
+  - The five-action read set, without PartiQLSelect or ConditionCheckItem, was your        2 -  "hooks": {
+    explicit decision.                                                                     3 -    "Stop": [
+  - No kms_key_arn guard. Plan mode cannot read it. A later CMK flips checkov from 16/1    4 -      {
+    to 17/0, which is visible.                                                             5 -        "hooks": [
+                                                                                           6 -          {
+  Deferred minors                                                                          7 -            "type": "command",
+                                                                                           8 -            "command": "bash .claude/hooks/verify_claim.sh \"$CLA
+  - The policy test cannot guard resource scope in plan mode because the table ARN is        -UDE_TRANSCRIPT_PATH\""
+    unknown. Checkov catches resources = ["*"].                                            9 -          }
+  - The tests assert on the data source, not the rendered policy on                       10 -        ]
+    aws_iam_policy.orders_access. Checkov catches a literal wildcard.                     11 -      }
+  - The GREEN evidence files hold only the test output. The format and validate output    12 -    ]
+    was not captured because of how the plan's command was piped.                         13 -  }
+  - The checkov evidence has no note that the remaining failure is accepted, and no       14 -}
+    captured before run.                                                                   0
+  - The original main.tf was never committed, so the PITR RED cannot be reproduced from
+    git alone.                                                                           ──────────────────────────────────────────────────────────────────────
+                                                                                         modules/module-08-harness-engineering/lab/debug/main.tf
+  Implementation complete. What would you like to do?                                    ──────────────────────────────────────────────────────────────────────
+                                                                                           1 -# Lab 8 debugging exercise -- broken. Uses the argument name Floc
+  1. Merge back to main locally                                                              -i's own
+  2. Push and create a Pull Request                                                        2 -# README shows (`endpoint_url`), which is not real AWS-provider s
+  3. Keep the branch as-is (I'll handle it later)                                            -yntax. This
+                                                                                           3 -# is a genuine, reproducible mistake, not a staged typo.
+  Which option?                                                                            4 -terraform {
+                                                                                           5 -  required_version = ">= 1.6"
+✻ Churned for 12m 45s · done 12:13 AM                                                      6 -  required_providers {
+                                                                                                               Update available! Run: brew upgrade claude-code
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ Keep the branch as-is
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ accept edits on (shift+tab to cycle)

@@ -1,0 +1,6 @@
+tests/policy.tftest.hcl... in progress
+  run "policy_is_read_only"... pass
+tests/policy.tftest.hcl... tearing down
+tests/policy.tftest.hcl... pass
+
+Success! 1 passed, 0 failed.

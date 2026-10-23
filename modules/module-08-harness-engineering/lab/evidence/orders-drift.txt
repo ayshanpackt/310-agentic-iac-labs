@@ -1,0 +1,10 @@
+aws_dynamodb_table.orders: Refreshing state... [id=checkout-orders]
+data.aws_iam_policy_document.orders_access: Reading...
+data.aws_iam_policy_document.orders_access: Read complete after 0s [id=2423781511]
+aws_iam_policy.orders_access: Refreshing state... [id=arn:aws:iam::000000000000:policy/checkout-orders-access]
+
+No changes. Your infrastructure matches the configuration.
+
+Terraform has compared your real infrastructure against your configuration
+and found no differences, so no changes are needed.
+exit code: 0

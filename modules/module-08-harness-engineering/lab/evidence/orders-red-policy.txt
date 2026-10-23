@@ -1,0 +1,47 @@
+tests/policy.tftest.hcl... in progress
+  run "policy_is_read_only"... fail
+
+Error: Test assertion failed
+
+  on tests/policy.tftest.hcl line 10, in run "policy_is_read_only":
+  10:     condition = data.aws_iam_policy_document.orders_access.statement[0].actions == toset([
+  11:       "dynamodb:GetItem",
+  12:       "dynamodb:BatchGetItem",
+  13:       "dynamodb:Query",
+  14:       "dynamodb:Scan",
+  15:       "dynamodb:DescribeTable",
+  16:     ])
+    ├────────────────
+    │ Diff:
+    │ --- actual
+    │ +++ expected
+    │   [
+    │ -   "dynamodb:*"
+    │ - ]
+    │ +   "dynamodb:BatchGetItem",
+    │ +   "dynamodb:DescribeTable",
+    │ +   "dynamodb:GetItem",
+    │ +   "dynamodb:Query",
+    │ +   "dynamodb:Scan"
+    │ + ]
+
+
+policy actions are not exactly the five read-only DynamoDB actions
+
+Error: Test assertion failed
+
+  on tests/policy.tftest.hcl line 21, in run "policy_is_read_only":
+  21:     condition     = length([for a in data.aws_iam_policy_document.orders_access.statement[0].actions : a if strcontains(a, "*")]) == 0
+    ├────────────────
+    │ Diff:
+    │ --- actual
+    │ +++ expected
+    │ - 1
+    │ + 0
+
+
+policy actions must not contain a wildcard
+tests/policy.tftest.hcl... tearing down
+tests/policy.tftest.hcl... fail
+
+Failure! 0 passed, 1 failed.

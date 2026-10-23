@@ -1,0 +1,13 @@
+$ claude plugin list
+Synced from claude.ai:
+
+  ❯ cowork-plugin-management@synced
+    Version: 0.2.2
+    Path: /private/tmp/claude-501/-Users-gshah-work-courses-310/644538dc-5f4e-4aa5-8aab-99b7d643f237/scratchpad/learner-home/.claude/plugins/synced/3f649e74-143f-45e2-8b16-778b51add592_1822901f-ada3-4d8e-a5c2-5780ae315e85/cowork-plugin-management
+    Status: ✔ loaded
+
+  ❯ avoid-ai-writing@synced
+    Version: 3.38.0
+    Path: /private/tmp/claude-501/-Users-gshah-work-courses-310/644538dc-5f4e-4aa5-8aab-99b7d643f237/scratchpad/learner-home/.claude/plugins/synced/3f649e74-143f-45e2-8b16-778b51add592_1822901f-ada3-4d8e-a5c2-5780ae315e85/avoid-ai-writing
+    Status: ✔ loaded
+

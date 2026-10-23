@@ -1,0 +1,50 @@
+            emulator. Checkov runs as a
+      178    secondary gate, not as the test.                                            12 files changed -414                                                ✕
+      179  - Action order in the policy follows the author's list verbatim.
+      180 +- The `kms_key_arn` guard was dropped from the encryption test after a        …rness-engineering/lab/.claude/settings.local.example.json         -14
+          + builder review showed it                                                     modules/module-08-harness-engineering/lab/debug/main.tf            -29
+      181 +  cannot evaluate in plan mode (computed attribute). The non-goal carr        …/module-08-harness-engineering/lab/debug/solution/main.tf         -31
+          +ies that rule instead.                                                        …dule-08-harness-engineering/lab/evidence/backed-claim.txt          -6
+      182 +- A Floci rejection of PITR or SSE at apply time is recorded as a find        …le-08-harness-engineering/lab/evidence/unbacked-claim.txt          -1
+          +ing, not worked around.                                                       …s/module-08-harness-engineering/lab/hooks/verify_claim.sh         -30
+                                                                                         modules/module-08-harness-engineering/lab/run.sh                  -108
+⏺ The design doc is written and reviewed. It is at:                                      modules/module-08-harness-engineering/lab/solution/main.tf         -56
+                                                                                         ↓ 4 more below (opt+↓ to scroll)
+  /Users/gshah/work/courses/310-packt/modules/module-08-harness-engineering/lab/orders/d
+  ocs/superpowers/specs/2026-10-22-orders-table-production-readiness-design.md           ──────────────────────────────────────────────────────────────────────
+                                                                                         modules/module-08-harness-engineering/lab/.claude/settings.local.examp
+  Nothing has been built. One thing to know about the location: the lab's .gitignore     le.json
+  ignores every docs/ directory, so this file is untracked. Move it or adjust the ignore ──────────────────────────────────────────────────────────────────────
+  rule if you want it committed.                                                           1 -{
+                                                                                           2 -  "hooks": {
+  One question only you can answer. It changes what gets built.                            3 -    "Stop": [
+                                                                                           4 -      {
+  The phrase "encryption on with the AWS-owned key" describes the table as it already      5 -        "hooks": [
+  is. DynamoDB always encrypts at rest, and an absent server_side_encryption block         6 -          {
+  already means the AWS-owned key. The only change that is visible in HCL, in a plan, in   7 -            "type": "command",
+  a test, and to checkov is enabled = true, and that selects the AWS-managed key           8 -            "command": "bash .claude/hooks/verify_claim.sh \"$CLA
+  aws/dynamodb instead. Both cost nothing and neither needs a KMS resource. The design       -UDE_TRANSCRIPT_PATH\""
+  currently assumes enabled = true, because that is the only reading under which the       9 -          }
+  encryption test can go RED then GREEN. Do you want the AWS-managed key, or do you       10 -        ]
+  literally want the AWS-owned key and goal 2 becomes "confirm it is already true"?       11 -      }
+                                                                                          12 -    ]
+  Calls I made, for you to check while reading:                                           13 -  }
+                                                                                          14 -}
+  - Tests are plan-mode terraform test, so they need no Floci. Checkov runs as a           0
+    secondary gate.
+  - The encryption test asserts only enabled = true. A guard on kms_key_arn was dropped  ──────────────────────────────────────────────────────────────────────
+    because that attribute is computed and cannot be evaluated in plan mode.             modules/module-08-harness-engineering/lab/debug/main.tf
+  - The policy test asserts on the data source's statement[0].actions, not the rendered  ──────────────────────────────────────────────────────────────────────
+    JSON, which is unknown before apply.                                                   1 -# Lab 8 debugging exercise -- broken. Uses the argument name Floc
+  - If Floci rejects PITR or SSE at apply time, the builder keeps the config, confirms       -i's own
+    destroy still works, and records the error as a finding rather than dropping the       2 -# README shows (`endpoint_url`), which is not real AWS-provider s
+    feature.                                                                                 -yntax. This
+                                                                                           3 -# is a genuine, reproducible mistake, not a staged typo.
+  Next step once you answer: the implementation plan, via the writing-plans skill.         4 -terraform {
+                                                                                           5 -  required_version = ">= 1.6"
+✻ Sautéed for 5m 45s · done 11:54 PM                                                       6 -  required_providers {
+                                                                                                               Update available! Run: brew upgrade claude-code
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ AWS-managed key is fine, go ahead and write the plan
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ accept edits on (shift+tab to cycle)

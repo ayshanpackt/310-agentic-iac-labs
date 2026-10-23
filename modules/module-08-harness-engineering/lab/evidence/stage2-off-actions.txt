@@ -1,0 +1,44 @@
+ 1. Bash   ls -la && find . -type f | head -50
+ 2. Read   /Users/gshah/work/courses/310-packt/modules/module-08-harness-engineering/lab/stage2-off/main.tf
+ 3. Read   /Users/gshah/work/courses/310-packt/modules/module-08-harness-engineering/lab/stage2-off/provider.tf
+ 4. Bash   cd /Users/gshah/work/courses/310-packt/modules/module-08-harness-engineering/lab && ls -la . tests s
+ 5. Bash   ls -la /Users/gshah/work/courses/310-packt/modules/module-08-harness-engineering/lab /Users/gshah/wo
+ 6. Bash   find /Users/gshah/work/courses/310-packt/modules/module-08-harness-engineering -maxdepth 3 -type f \
+ 7. Bash   which terraform tflint checkov tfsec trivy; terraform version 2>/dev/null; curl -s -m 3 http://local
+ 8. Bash   ls -la /Users/gshah/work/courses/310-packt/modules/module-08-harness-engineering/lab/stage2-off/test
+ 9. Bash   terraform version
+10. Bash   curl -s -m 3 http://localhost:4566/_localstack/health
+11. Bash   git -C /Users/gshah/work/courses/310-packt/modules/module-08-harness-engineering/lab/stage2-off log 
+12. Bash   terraform init -input=false -no-color 2>&1 | tail -15
+13. Write  /Users/gshah/work/courses/310-packt/modules/module-08-harness-engineering/lab/stage2-off/main.tf
+14. Write  /Users/gshah/work/courses/310-packt/modules/module-08-harness-engineering/lab/stage2-off/tests/order
+15. Bash   terraform fmt -recursive -check -diff -no-color
+16. Bash   terraform validate -no-color
+17. Bash   terraform test -no-color 2>&1 | tail -30
+18. Bash   terraform fmt -recursive -no-color
+19. Bash   terraform test -no-color -var deletion_protection=false 2>&1 | grep -E "run |Deletion protection|pas
+20. Bash   terraform fmt -recursive -check -no-color && terraform test -no-color 2>&1 | tail -3
+21. Bash   git status --short --ignored .
+
+--- final answer ---
+The checkout orders table in `stage2-off/main.tf` is now hardened, and plan-mode Terraform tests back each change. Everything validates and the tests pass.
+
+**What changed in the table**
+
+- **Encryption at rest** now uses a customer-managed KMS key with yearly rotation and a 30-day deletion window, plus an `alias/checkout-orders` alias.
+- **Point-in-time recovery** is enabled so a bad deploy or bad write can be rolled back to any second in the last 35 days.
+- **Deletion protection** is on by default via a `deletion_protection` variable, and the resource also carries `prevent_destroy`. Tearing down a lab environment requires setting the variable to false and removing the lifecycle guard.
+- **Tags** record service, component, environment, data classification, and Terraform ownership.
+
+**What changed in the IAM policy**
+
+- The `dynamodb:*` grant is replaced with the nine item-level actions the service actually needs. Scan and all table-management actions are excluded.
+- Resources cover the table and any future indexes.
+- A second statement grants the three KMS operations DynamoDB needs, restricted with a `kms:ViaService` condition so the key can't be used from anywhere else.
+
+**Tests** in `tests/orders.tftest.hcl` run against the plan only, so they need no LocalStack or AWS account. They assert PITR, encryption, deletion protection, key rotation, the classification tag, and that the policy has no wildcards, no Scan, and no table-management actions. I confirmed they are not vacuous: running with deletion protection off fails the expected assertion.
+
+**Two things to know**
+
+- This directory is gitignored, so nothing here is tracked. That looks intentional for the lab layout, so I left it alone.
+- I could not reach LocalStack to apply the plan. The checks I ran were `terraform validate`, `terraform fmt -check`, and `terraform test`, all of which pass.

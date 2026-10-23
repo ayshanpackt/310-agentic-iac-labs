@@ -1,0 +1,16 @@
+ 1. Skill  superpowers:brainstorming
+ 2. Bash   ls -la && find . -maxdepth 3 -not -path '*/.git/*' | head -80 && cat CLAUDE.md 2>/dev/null; cat .cla
+ 3. Read   /Users/gshah/work/courses/310-packt/modules/module-08-harness-engineering/lab/stage2-on/main.tf
+ 4. Read   /Users/gshah/work/courses/310-packt/modules/module-08-harness-engineering/lab/stage2-on/provider.tf
+ 5. Bash   cd /Users/gshah/work/courses/310-packt/modules/module-08-harness-engineering/lab && ls -la . .. ../.
+ 6. Bash   ls -la /Users/gshah/work/courses/310-packt/modules/module-08-harness-engineering/lab /Users/gshah/wo
+ 7. Read   /Users/gshah/work/courses/310-packt/modules/module-08-harness-engineering/lab/README.md
+ 8. Read   /Users/gshah/work/courses/310-packt/modules/module-08-harness-engineering/README.md
+ 9. Read   /Users/gshah/work/courses/310-packt/modules/module-08-harness-engineering/LAB.md
+
+--- final answer ---
+I've read the table definition and the surrounding lab. Before building anything, one question, per the brainstorming step.
+
+If you'd rather skip the questions and have me just start, say so and I'll go straight to a test-first pass on the table and its IAM policy.
+
+What does "production-ready" mean for this table in your head: is this about passing a scanner like checkov before launch, about surviving a real incident (a bad deploy deleting the table, a lost record), or about the `dynamodb:*` policy being too broad?

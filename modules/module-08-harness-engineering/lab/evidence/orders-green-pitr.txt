@@ -1,0 +1,7 @@
+tests/pitr.tftest.hcl... in progress
+  run "table_shape_unchanged"... pass
+  run "pitr_enabled"... pass
+tests/pitr.tftest.hcl... tearing down
+tests/pitr.tftest.hcl... pass
+
+Success! 2 passed, 0 failed.

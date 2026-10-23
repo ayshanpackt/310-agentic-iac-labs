@@ -1,0 +1,38 @@
+# aws_dynamodb_table.orders:
+resource "aws_dynamodb_table" "orders" {
+    arn                         = "arn:aws:dynamodb:us-east-1:000000000000:table/checkout-orders"
+    billing_mode                = "PAY_PER_REQUEST"
+    deletion_protection_enabled = false
+    hash_key                    = "order_id"
+    id                          = "checkout-orders"
+    name                        = "checkout-orders"
+    read_capacity               = 0
+    region                      = "us-east-1"
+    stream_arn                  = null
+    stream_enabled              = false
+    stream_label                = null
+    stream_view_type            = null
+    table_class                 = "STANDARD"
+    tags_all                    = {}
+    write_capacity              = 0
+
+    attribute {
+        name = "order_id"
+        type = "S"
+    }
+
+    point_in_time_recovery {
+        enabled                 = true
+        recovery_period_in_days = 35
+    }
+
+    server_side_encryption {
+        enabled     = true
+        kms_key_arn = "arn:aws:kms:us-east-1:000000000000:key/aws-managed-dynamodb"
+    }
+
+    ttl {
+        attribute_name = null
+        enabled        = false
+    }
+}

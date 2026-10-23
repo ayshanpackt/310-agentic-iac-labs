@@ -1,1 +1,0 @@
-Agent: I fixed the S3 bucket module, added versioning and a public access block. checkov passes now, the module is clean.

@@ -1,0 +1,50 @@
+  output, and its paraphrase was wrong in a way pasted output would not have been. Its
+  message, verbatim:                                                                     12 files changed -414                                                ✕
+
+  ▎ 1. Tests pass: YES. terraform test just now: 4/4 pass (PITR enabled, SSE enabled,    …rness-engineering/lab/.claude/settings.local.example.json         -14
+  ▎ policy is exactly the 5 read-only actions, table identity unchanged).                modules/module-08-harness-engineering/lab/debug/main.tf            -29
+  ▎ 2. Checkov clean: NO. checkov -d . --compact --quiet just now: 16 passed, 1 failed:  …/module-08-harness-engineering/lab/debug/solution/main.tf         -31
+  ▎ CKV_AWS_119, table uses AWS-owned key instead of a customer-managed KMS CMK.         …dule-08-harness-engineering/lab/evidence/backed-claim.txt          -6
+                                                                                         …le-08-harness-engineering/lab/evidence/unbacked-claim.txt          -1
+  No Success! 4 passed line, no Passed checks: line, no FAILED for resource line. That   …s/module-08-harness-engineering/lab/hooks/verify_claim.sh         -30
+  is the failure the skill addresses: a summary standing in for the output.              modules/module-08-harness-engineering/lab/run.sh                  -108
+                                                                                         modules/module-08-harness-engineering/lab/solution/main.tf         -56
+  GREEN, with skill, two reps. Both converged on the same shape. Rep 1, verbatim:        ↓ 4 more below (opt+↓ to scroll)
+
+  ▎ 1. Tests pass. Ran terraform test just now in the module:                            ──────────────────────────────────────────────────────────────────────
+  ▎ Success! 4 passed, 0 failed.                                                         modules/module-08-harness-engineering/lab/.claude/settings.local.examp
+  ▎ 2. Checkov NOT clean. Ran checkov -d . --compact --quiet just now.                   le.json
+  ▎ Passed checks: 16, Failed checks: 1, Skipped checks: 0                               ──────────────────────────────────────────────────────────────────────
+  ▎ Check: CKV_AWS_119: "Ensure DynamoDB Tables are encrypted using a KMS Customer         1 -{
+  ▎ Managed CMK"                                                                           2 -  "hooks": {
+  ▎         FAILED for resource: aws_dynamodb_table.orders                                 3 -    "Stop": [
+  ▎ 3. NOT VERIFIED: applied. I did not run terraform apply. Floci is reserved by          4 -      {
+  ▎ payments right now. Mihail said in standup it went fine, but there is no apply         5 -        "hooks": [
+  ▎ output, no state file, and no evidence directory in the module I am working from.      6 -          {
+  ▎ 4. NOT VERIFIED: destroyed. Same gap.                                                  7 -            "type": "command",
+                                                                                           8 -            "command": "bash .claude/hooks/verify_claim.sh \"$CLA
+  Rep 2 produced the same four items with the same pasted lines. Both said the checkov       -UDE_TRANSCRIPT_PATH\""
+  result was the tempting one and that the skill's "clean except one small finding" row    9 -          }
+  is what stopped them. Both said nothing in the skill was unclear.                       10 -        ]
+                                                                                          11 -      }
+  Refactor. No new rationalizations surfaced, so no counters were added.                  12 -    ]
+                                                                                          13 -  }
+  One observation outside the skill's scope. All three agents, with and without the       14 -}
+  skill, wrote "AWS-owned key" in their commentary. The module uses the AWS-managed key,   0
+  as the earlier state read-back showed. The skill does not fix domain facts, but with
+  the evidence pasted next to the prose a reader can now catch that slip, which the      ──────────────────────────────────────────────────────────────────────
+  baseline's summary hid.                                                                modules/module-08-harness-engineering/lab/debug/main.tf
+                                                                                         ──────────────────────────────────────────────────────────────────────
+  Still pending from before: the branch now has six commits and is waiting on your         1 -# Lab 8 debugging exercise -- broken. Uses the argument name Floc
+  integration choice.                                                                        -i's own
+                                                                                           2 -# README shows (`endpoint_url`), which is not real AWS-provider s
+  1. Merge back to main locally                                                              -yntax. This
+  2. Push and create a Pull Request                                                        3 -# is a genuine, reproducible mistake, not a staged typo.
+  3. Keep the branch as-is (I'll handle it later)                                          4 -terraform {
+                                                                                           5 -  required_version = ">= 1.6"
+  Which option?                                                                            6 -  required_providers {
+                                                                                                               Update available! Run: brew upgrade claude-code
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ Merge it back to main locally.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ accept edits on (shift+tab to cycle)

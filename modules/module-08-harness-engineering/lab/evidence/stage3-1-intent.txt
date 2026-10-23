@@ -1,0 +1,50 @@
+
+ ▐▛███▛█   Claude Code v2.1.304
+▝▜██████▀  Fable 5.1 · Claude Max
+ ▝▝   ▝▝   ~/work/courses/310-packt/modules/module-08-harness-engineering/lab/orders
+
+  Get to finished work sooner with Opus 5.5. Switch anytime with /model.
+  1 more notice hidden
+
+❯ Let's make the checkout service's orders table in this module production-ready.
+
+⏺ I'll start by loading the brainstorming skill, since this is a design change and the request is open-ended.
+
+⏺ Skill(superpowers:brainstorming)
+  ⎿  Successfully loaded skill
+
+⏺ Let me look at what's in the lab directory first so my question is grounded.
+
+  Read 4 files, listed 1 directory, ran 1 shell command
+
+⏺ I've read the table definition and the lab around it. The table is a single-key DynamoDB table with a dynamodb:* IAM policy and a TODO to harden it before
+  launch.
+
+  If you'd rather skip the questions and have me just start, say so and I'll go straight to a test-first hardening pass on the table and its policy.
+
+  What's the failure you most want this table to survive once real orders are flowing through it?
+
+✻ Brewed for 29s · done 11:48 PM
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                                                                               Update available! Run: brew upgrade claude-code
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ Skip the questions, just start
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ accept edits on (shift+tab to cycle)

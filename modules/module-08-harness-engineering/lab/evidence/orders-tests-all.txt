@@ -1,0 +1,15 @@
+tests/pitr.tftest.hcl... in progress
+  run "table_shape_unchanged"... pass
+  run "pitr_enabled"... pass
+tests/pitr.tftest.hcl... tearing down
+tests/pitr.tftest.hcl... pass
+tests/policy.tftest.hcl... in progress
+  run "policy_is_read_only"... pass
+tests/policy.tftest.hcl... tearing down
+tests/policy.tftest.hcl... pass
+tests/sse.tftest.hcl... in progress
+  run "sse_enabled"... pass
+tests/sse.tftest.hcl... tearing down
+tests/sse.tftest.hcl... pass
+
+Success! 4 passed, 0 failed.
