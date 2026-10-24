@@ -1,2 +1,10 @@
+# Terraform working files
 .terraform/
 .terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+
+# local_file output: pipeline.env and signing.env carry token values at apply time
+rendered/

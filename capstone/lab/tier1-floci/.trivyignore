@@ -1,0 +1,5 @@
+# spec.md SC-003: the bucket is not encrypted with a customer-managed KMS key.
+# Fixing it adds a KMS key resource and pushes the module past its own CN-003
+# resource cap, so this one finding is accepted, on the record, here. Every other
+# HIGH/CRITICAL finding blocks the pipeline.
+AVD-AWS-0132

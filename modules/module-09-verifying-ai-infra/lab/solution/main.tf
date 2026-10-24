@@ -25,15 +25,19 @@ variable "endpoint" {
   default = "http://localhost:4566"
 }
 
-# checkov's CKV2_AWS_62 / CKV2_AWS_61 / CKV_AWS_144 findings on both buckets below are a
-# deliberate, reviewed exception. Event notifications, lifecycle, and cross-region
-# replication are production DR concerns, not a lab requirement. That exception is passed
-# to checkov via --skip-check on the CLI in pipeline.sh, not an inline comment: inline
-# #checkov:skip comments did not actually suppress these findings when tested against
-# checkov 3.3.16 in this course's own environment, the CLI flag did. Trivy's inline ignore
-# comment did work, see the aws_s3_bucket_server_side_encryption_configuration resources
-# further down, where AWS-0132 actually reports.
+# Three checkov findings on each bucket below are a deliberate, reviewed exception. Event
+# notifications (CKV2_AWS_62), lifecycle rules (CKV2_AWS_61) and cross-region replication
+# (CKV_AWS_144) are production DR concerns, not a lab requirement. Each waiver sits inline
+# on the one resource it covers, with its reason beside it, so checkov reports it under
+# "Skipped checks" for that resource only. A --skip-check flag on the CLI would silence the
+# same check for every resource in the directory, including ones nobody reviewed.
+# Verified against checkov 3.3.30: the solution scan shows "Failed checks: 0, Skipped
+# checks: 6", two buckets times three waivers. Trivy's inline ignore comment works the same
+# way, see the aws_s3_bucket_server_side_encryption_configuration resources further down.
 resource "aws_s3_bucket" "reports" {
+  #checkov:skip=CKV2_AWS_62:Event notifications are a production concern, not a lab requirement. Reviewed exception.
+  #checkov:skip=CKV2_AWS_61:Lifecycle rules are a production concern, not a lab requirement. Reviewed exception.
+  #checkov:skip=CKV_AWS_144:Cross-region replication is a production DR concern, not a lab requirement. Reviewed exception.
   bucket        = "m09-lab-reports"
   force_destroy = true
 
@@ -45,6 +49,9 @@ resource "aws_s3_bucket" "reports" {
 }
 
 resource "aws_s3_bucket" "backups" {
+  #checkov:skip=CKV2_AWS_62:Event notifications are a production concern, not a lab requirement. Reviewed exception.
+  #checkov:skip=CKV2_AWS_61:Lifecycle rules are a production concern, not a lab requirement. Reviewed exception.
+  #checkov:skip=CKV_AWS_144:Cross-region replication is a production DR concern, not a lab requirement. Reviewed exception.
   bucket        = "m09-lab-backups"
   force_destroy = true
 

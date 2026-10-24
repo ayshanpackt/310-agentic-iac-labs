@@ -1,0 +1,30 @@
+$ CAPSTONE_FLOCI_PORT=4599 ./run.sh    # 2026-10-23T06:48Z, Darwin arm64, terraform 1.14.8, trivy 0.76.1, checkov 3.3.30, floci/floci:1.7.0
+==> 1. preflight
+    ok
+==> 2. floci up, docker socket mounted, health verified before any plan
+    ok, floci/floci:1.7.0 healthy on :4599, socket mounted: {"original_edition":"floci-always-free","version":"1.7.0","services":{"ssm":"running","sqs":"running","s3":"running","dynamodb":"running","sns":"running","lambda":"running","apigateway":"running","iam":"running","kafka":"running","mq":"running","elasticache":"running","memorydb":"running","rds":"running","rds-data":"running","neptune":"running","docdb":"running","events":"running","servicediscovery":"running","elasticmapreduce":"running","wafv2":"running","scheduler":"running","logs":"running","monitoring":"running","secretsmanager":"running","apigatewayv2":"running","kinesis":"running","kinesisanalytics":"running","kms":"running","cognito-idp":"running","states":"running","swf":"running","cloudformation":"running","acm":"running","athena":"running","glue":"running","firehose":"running","email":"running","es":"running","ec2":"running","ecs":"running","appconfig":"running","appconfigdata":"running","ecr":"running","tagging":"running","bedrock-runtime":"running","eks":"running","mwaa":"running","pipes":"running","bedrock-agentcore-control":"running","bedrock-agentcore":"running","elasticloadbalancing":"running","codebuild":"running","batch":"running","codedeploy":"running","codepipeline":"running","config":"running","cloudtrail":"running","lightsail":"running","cloudcontrol":"running","autoscaling":"running","application-autoscaling":"running","elasticbeanstalk":"running","backup":"running","transfer":"running","route53":"running","textract":"running","pricing":"running","transcribe":"running","ce":"running","cur":"running","bcm-data-exports":"running","cloudfront":"running","appsync":"running","s3vectors":"running","s3tables":"running","iot":"running","iotdata":"running","cloudhsmv2":"running","rum":"running","guardduty":"running"},"edition":"community"}
+==> 3. blast-radius gate rejects unreadable input
+    ok, 5 bad inputs, 5 GATE ERRORs
+==> 4. blast-radius gate blocks deletes, oversized plans, high-radius types
+    ok, 3 blocked for the right reason, 1 clean plan passed
+==> 5. pipeline must BLOCK the starter module (trivy, checkov, OPA, all real)
+    ok
+==> 6. pipeline must BLOCK a solution copy with one regression
+    ok, caught by failed gates: trivy checkov
+==> 7. pipeline must stop immediately when a scanner is missing
+    ok
+==> 8. pipeline must BLOCK the solution module without human approval
+    ok
+==> 9. pipeline must PASS the solution module once approved, and record the plan hash
+    ok, plan to approve: Plan: 4 to add, 0 to change, 0 to destroy.
+==> 10. apply must refuse a plan that changed after approval
+    ok
+==> 11. real floci apply, from the approved saved plan only
+    ok, 4 resources applied, approval record consumed, second apply refused
+==> 12. real drift, caught on re-plan (required step)
+    ok, drift caught: "Suspended" -> "Enabled", Plan: 0 to add, 1 to change, 0 to destroy.
+==> 13. numbered teardown: terraform destroy, remove floci, clear pipeline state
+    ok
+
+TIER 1 PIPELINE PASSED -- floci verified before planning, gate fails closed on bad input, starter blocked, regression blocked, missing tool stops the run, approval required, apply only from the approved plan, drift caught, destroyed cleanly
+exit=0

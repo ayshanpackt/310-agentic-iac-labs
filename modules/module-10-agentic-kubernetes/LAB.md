@@ -37,7 +37,12 @@ helm version
 docker info
 ```
 
-If `docker info` hangs or errors, stop and fix Docker first, same as every earlier Tier 1 lab.
+`helm version` must print a `v4.` version. This lab pins Helm 4, and `lab/run.sh` refuses to
+start on Helm 3. If `docker info` hangs or errors, stop and fix Docker first, same as every
+earlier Tier 1 lab.
+
+- Claude Code on `PATH` for Stage 2, Step 4 only. The three delivery layers and the
+  validation script's default run need no agent at all.
 
 ## Start the cluster
 
@@ -118,7 +123,7 @@ minute later, a real false negative this lab hit while being built.
 **Confirm** it's really v2, not v1, before doing anything else:
 
 ```
-helm list -n crossplane-system
+helm list --kube-context kind-m10-lab -n crossplane-system
 ```
 
 The `APP VERSION` column should read `2.4.0`. If it starts with `1.`, you added the wrong
@@ -395,9 +400,13 @@ a `{{ .Values.* }}` reference.
 **Install** a second, independent instance, this time for a real named team database:
 
 ```
-helm install billing-db ./lab/charts/postgres-db -n dbaas-helm --create-namespace \
-  --set dbName=billing_service --wait --timeout 90s
+helm install billing-db ./lab/charts/postgres-db --kube-context kind-m10-lab \
+  -n dbaas-helm --create-namespace --set dbName=billing_service --wait --timeout 90s
 ```
+
+`--kube-context kind-m10-lab` is Helm's spelling of `kubectl`'s `--context`. Leave it off
+and Helm installs into whichever cluster your kubeconfig currently points at, which after a
+day of switching between labs is not always the one you think.
 
 **Verify** it's a genuinely separate database:
 
@@ -414,8 +423,9 @@ kubectl --context kind-m10-lab -n dbaas-helm exec billing-db-postgres-0 -- \
 (1 row)
 ```
 
-`helm list -n dbaas-helm` shows a real release, `helm uninstall billing-db -n dbaas-helm`
-would take the whole thing back out, one command, no hunting for which manifests belong
+`helm list --kube-context kind-m10-lab -n dbaas-helm` shows a real release,
+`helm uninstall billing-db --kube-context kind-m10-lab -n dbaas-helm` would take the whole
+thing back out, one command, no hunting for which manifests belong
 together.
 
 ### Step 3: Request a database as a namespaced Crossplane XR
@@ -621,7 +631,7 @@ composed for them, are gone.
 **2. Uninstall the Helm release:**
 
 ```
-helm uninstall billing-db -n dbaas-helm
+helm uninstall billing-db --kube-context kind-m10-lab -n dbaas-helm
 ```
 
 **3. Delete the cluster:**
@@ -653,8 +663,9 @@ of those renames does the Helm chart handle for you automatically?
 
 ## Validation
 
-Run the full build yourself, all three delivery layers plus the agent-proposed request,
-against a real `kind` cluster, start to finish:
+Run the full build yourself, all three delivery layers, against a real `kind` cluster, start
+to finish. The default run is deterministic: it calls no agent, so it passes or fails for the
+same reason on every machine.
 
 ```
 cd modules/module-10-agentic-kubernetes/lab
@@ -663,6 +674,8 @@ cd modules/module-10-agentic-kubernetes/lab
 
 `run.sh` checks:
 
+- `kind`, `kubectl`, a Helm 4 binary, `docker` and `python3` are on `PATH`, and Docker answers.
+  It fails with a one-line message naming the missing tool before it creates anything
 - A real `kind` cluster comes up with the node image pinned by digest
 - Crossplane v2.4.0 installs and the composition function goes healthy
 - The warm-up XR goes `Ready` and its composed `ConfigMap` carries the real patched data
@@ -673,6 +686,35 @@ cd modules/module-10-agentic-kubernetes/lab
   error is confirmed to reproduce, then the shipped, fixed Composition is restored
 - Layer 3's Crossplane XR goes `Synced` and `Ready`, and the composed Postgres is queryable
 - Teardown garbage-collects the composed resources and leaves no orphan cluster container
+
+The default run does **not** check Stage 2, Step 4. There, you are the gate: you read the
+`kubectl diff` of the agent's proposal before you apply it, and that reading is the check.
+
+To have the script run the agent step too, set one variable. The script then runs the exact
+`claude -p` command printed in Step 4, refuses to continue unless the agent wrote
+`lab/requests/analytics-xr.yaml`, confirms every field matches what was asked for and nothing
+else was added, requires `kubectl diff` to show exactly one pending create and the API server
+to accept the object against the XRD, then applies it, waits for `Synced` and `Ready`, and
+runs a real query against the composed database:
+
+```
+cd modules/module-10-agentic-kubernetes/lab
+M10_LIVE_AGENT=1 ./run.sh
+```
+
+`[ Expected output ]` (excerpt, captured from a real run)
+```
+==> 13. live agent: Claude Code proposes requests/analytics-xr.yaml, this script reads the diff and applies it
+    ok, agent wrote requests/analytics-xr.yaml and every field matches the request
+    ok, kubectl diff shows exactly the pending create, server-side dry run accepts it
+    ok, agent-proposed XDatabase Synced+Ready, real postgres analytics_events queryable
+==> 14. teardown
+    ok, XR and composed resource gone, cluster deleted, no orphans
+```
+
+This check needs Claude Code on `PATH` and a signed-in subscription, so it stays opt-in. An
+agent is non-deterministic by nature; if it ever writes a file that does not match the
+request, the script fails on the exact field that differs, which is the point.
 
 ## Summary
 

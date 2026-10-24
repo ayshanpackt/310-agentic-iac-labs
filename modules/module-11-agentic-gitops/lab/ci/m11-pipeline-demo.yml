@@ -1,0 +1,45 @@
+name: M11 pipeline demo
+
+on:
+  pull_request:
+    paths:
+      - 'modules/module-11-agentic-gitops/lab/pipeline-demo/**'
+      - 'modules/module-11-agentic-gitops/lab/gitops-demo/**'
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: modules/module-11-agentic-gitops/lab/pipeline-demo
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+      - name: terraform fmt
+        run: terraform fmt -check -diff
+      - name: terraform init
+        run: terraform init -backend=false -input=false
+      - name: terraform validate
+        run: terraform validate
+      - name: trivy
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: config
+          scan-ref: modules/module-11-agentic-gitops/lab
+          severity: HIGH,CRITICAL
+          exit-code: 1
+      - name: checkov (terraform)
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: modules/module-11-agentic-gitops/lab/pipeline-demo
+          quiet: true
+          compact: true
+      - name: checkov (manifests)
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: modules/module-11-agentic-gitops/lab/gitops-demo
+          framework: kubernetes,secrets
+          quiet: true
+          compact: true

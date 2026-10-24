@@ -141,7 +141,10 @@ FAIL - /tmp/plan.json - main - aws_s3_bucket.reports has no Owner tag: every aws
 ```
 
 `Exit code 1`. `aws_s3_bucket.reports` has no tags at all in the starter module; `backups`
-already does. **Fix**, re-plan, re-check:
+already does. One thing this hand run does not do: check that `terraform show -json` itself
+succeeded. If that command fails, `/tmp/plan.json` is empty, `conftest` finds zero resource
+changes in it, and reports zero failures. The pipeline you assemble in Step 5 checks the
+conversion and the JSON before policy ever runs. **Fix**, re-plan, re-check:
 
 `file: solution/main.tf` already has this fixed, both buckets carry
 `Owner = "m09-lab"`. Point `conftest` at the solution's plan instead and it passes clean,
@@ -164,7 +167,10 @@ don't, never a guessed number.
 
 `file: lab/pipeline.sh` in this repo is the reference version, five stages, in the order
 the reading argued for: fmt/validate, trivy, checkov, conftest, infracost, each one able to
-stop everything after it. **Run** it against the starter module first:
+stop everything after it. It runs under `set -euo pipefail`, writes its evidence to a fresh
+`/tmp/m09-pipeline` directory on every run, and treats a failed `terraform show -json`, or a
+JSON file that is not a complete plan, as a block, the same as a failed scanner. **Run** it
+against the starter module first:
 
 ```
 ./pipeline.sh module
@@ -192,10 +198,17 @@ BLOCKED at trivy
 Success! The configuration is valid.
 
 ==> stage 2/5: trivy
+...
     trivy: no HIGH/CRITICAL findings
 ==> stage 3/5: checkov
+terraform scan results:
+
+Passed checks: 25, Failed checks: 0, Skipped checks: 6
+
+
     checkov: no unreviewed findings
 ==> stage 4/5: conftest (org policy: every aws_s3_bucket needs tags.Owner)
+    plan json: format 1.2, 10 resource changes
 
 1 test, 1 passed, 0 warnings, 0 failures, 0 exceptions
 ==> stage 5/5: cost gate (infracost)
@@ -207,10 +220,12 @@ PIPELINE PASSED for solution: every stage that could run, ran for real and passe
 
 `Exit code 0`. Notice `solution/main.tf` still carries a few checkov findings by design,
 event notifications, lifecycle, and cross-region replication, all deferred with a written
-reason right in the file, and passed to `checkov` on the CLI with `--skip-check` rather
-than an inline comment. Inline `#checkov:skip` comments were tested against this exact
-checkov version and did not actually suppress those findings, the CLI flag did. That's
-worth remembering the next time a suppression silently doesn't work: verify it did.
+reason right in the file. Each waiver is an inline `#checkov:skip=CKV_...:reason` comment
+inside the one bucket resource it covers. `pipeline.sh` passes no `--skip-check` flag: a
+CLI-wide skip silences that check for every resource in the directory, including resources
+nobody reviewed, and keeps the reason far from the code. **Read** checkov's summary line in
+the output above. `Skipped checks: 6` is two buckets times three waivers, and it is how you
+verify a suppression did what you meant instead of assuming the syntax worked.
 
 ## Step 6: Evaluate the Agent's Output
 
@@ -220,61 +235,234 @@ actually asked, regardless of whether the bucket it produced happens to be safe.
 
 **Write** a deterministic rubric, plain Python, no model involved, that checks an agent's
 Terraform output against M04's own required-tags convention (`Environment`, `Owner`,
-`ManagedBy`):
+`ManagedBy`). It reads the real `tags = { ... }` map of every `aws_s3_bucket`, after
+blanking comments and string bodies, so the three names have to be keys of that map. A
+comment that lists them, a string that contains them, or a tags block on a neighbouring
+resource does not count, and a `tags` value it cannot read statically, `var.x` or
+`merge(...)`, fails rather than passes:
 
 `file: eval/rubric.py`
 ```python
 #!/usr/bin/env python3
 """Deterministic rubric: does this Terraform output tag every S3 bucket the way
-M04's convention requires? No model involved, plain text parsing, exit 0 or 1."""
+M04's convention requires? No model involved, exit 0 or 1.
+
+The rubric reads the real `tags = { ... }` attribute of each aws_s3_bucket resource, so
+the required names have to appear as keys of that map. A comment that mentions them, a
+string value that contains them, or a tags block on a neighbouring resource does not
+count. A tags value the rubric cannot read statically (var.x, merge(...), local.tags) is
+reported as a violation rather than waved through: the rubric fails closed."""
 import re
 import sys
 
 REQUIRED_TAGS = ["Environment", "Owner", "ManagedBy"]
 
+# Shadow the source: comments become spaces and string bodies become 'x', so brace
+# matching and keyword searches run on a copy that only contains real structure. The
+# shadow is the same length as the source, so every index points at the same character
+# in both.
+def shadow(src):
+    out = list(src)
+    n = len(src)
 
-def find_bucket_blocks(text):
-    blocks = []
-    for match in re.finditer(r'resource\s+"aws_s3_bucket"\s+"([^"]+)"\s*\{', text):
-        name = match.group(1)
-        start = match.end()
-        depth = 1
-        i = start
-        while depth > 0 and i < len(text):
-            if text[i] == "{":
+    def blank(j):
+        if src[j] != "\n":
+            out[j] = "x"
+
+    def scan_string(i):
+        """i points at an opening quote. Shadow the string body, including any quoted
+        strings nested inside ${ } interpolation, and return the index after the closing
+        quote."""
+        i += 1
+        depth = 0
+        while i < n:
+            ch = src[i]
+            if ch == "\\":
+                blank(i)
+                if i + 1 < n:
+                    blank(i + 1)
+                i += 2
+                continue
+            if depth == 0 and ch == '"':
+                return i + 1
+            if src.startswith("${", i) or src.startswith("%{", i):
                 depth += 1
-            elif text[i] == "}":
+                blank(i)
+                blank(i + 1)
+                i += 2
+                continue
+            if depth and ch == '"':
+                i = scan_string(i)  # a nested string inside the interpolation
+                continue
+            if depth and ch == "}":
                 depth -= 1
+            blank(i)
             i += 1
-        blocks.append((name, text[start:i]))
+        return n
+
+    i = 0
+    while i < n:
+        c = src[i]
+        if c == "#" or src.startswith("//", i):
+            while i < n and src[i] != "\n":
+                out[i] = " "
+                i += 1
+        elif src.startswith("/*", i):
+            end = src.find("*/", i + 2)
+            end = n if end < 0 else end + 2
+            for j in range(i, end):
+                if src[j] != "\n":
+                    out[j] = " "
+            i = end
+        elif c == '"':
+            i = scan_string(i)
+        else:
+            i += 1
+    return "".join(out)
+
+
+def matching_brace(sh, open_idx):
+    """Index of the '}' that closes the '{' at open_idx, or -1."""
+    depth = 0
+    for i in range(open_idx, len(sh)):
+        if sh[i] == "{":
+            depth += 1
+        elif sh[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return i
+    return -1
+
+
+def top_level_spans(sh, start, end):
+    """Yield (a, b) spans of sh[start:end] that sit outside any nested { }."""
+    depth, a = 0, start
+    for i in range(start, end):
+        if sh[i] == "{":
+            if depth == 0:
+                yield (a, i + 1)  # keep the brace: "tags = {" needs it to be recognised
+            depth += 1
+        elif sh[i] == "}":
+            depth -= 1
+            if depth == 0:
+                a = i + 1
+    yield (a, end)
+
+
+def find_bucket_blocks(src, sh):
+    """(name, body_start, body_end) for every aws_s3_bucket resource."""
+    blocks = []
+    for m in re.finditer(r'resource\s+"(x+)"\s+"(x+)"\s*\{', sh):
+        if src[m.start(1):m.end(1)] != "aws_s3_bucket":
+            continue
+        name = src[m.start(2):m.end(2)]
+        open_idx = m.end() - 1
+        close_idx = matching_brace(sh, open_idx)
+        if close_idx < 0:
+            close_idx = len(sh)
+        blocks.append((name, open_idx + 1, close_idx))
     return blocks
 
 
+def tags_attribute(src, sh, start, end):
+    """The tags attribute of a resource body. Returns ("map", keys), ("expr", text)
+    for a value that is not a literal map, ("dup", None) for a repeated attribute, or
+    (None, None) when there is no tags attribute at the top level of the body."""
+    found = []
+    for a, b in top_level_spans(sh, start, end):
+        for m in re.finditer(r"(?m)^[ \t]*tags[ \t]*=[ \t]*(\S)", sh[a:b]):
+            found.append((a + m.start(1), m.group(1)))
+    if not found:
+        return None, None
+    if len(found) > 1:
+        return "dup", None
+    pos, first = found[0]
+    if first != "{":
+        line_end = sh.find("\n", pos)
+        return "expr", src[pos:line_end if line_end >= 0 else len(src)].strip()
+    close = matching_brace(sh, pos)
+    if close < 0:
+        return "expr", "unterminated map"
+    keys = {}
+    for a, b in top_level_spans(sh, pos + 1, close):
+        for m in re.finditer(r'(?:^|[\s,{])("x+"|[A-Za-z_][\w-]*)\s*[=:]\s*([^\n,}]*)', sh[a:b]):
+            key = src[a + m.start(1):a + m.end(1)].strip('"')
+            value = src[a + m.start(2):a + m.end(2)].strip()
+            keys[key] = value
+    return "map", keys
+
+
+def present(value):
+    return value not in ("", '""', "null")
+
+
 def check(path):
-    text = open(path, encoding="utf-8").read()
-    blocks = find_bucket_blocks(text)
+    try:
+        with open(path, encoding="utf-8") as f:
+            src = f.read()
+    except FileNotFoundError:
+        return False, [f"file not found: {path}"]
+    sh = shadow(src)
+    blocks = find_bucket_blocks(src, sh)
     if not blocks:
         return False, ["no aws_s3_bucket resource found"]
     violations = []
-    for name, body in blocks:
-        missing = [t for t in REQUIRED_TAGS if t not in body]
+    for name, start, end in blocks:
+        kind, data = tags_attribute(src, sh, start, end)
+        if kind == "expr":
+            violations.append(
+                f"aws_s3_bucket.{name}: tags is not a literal map ({data}), cannot verify statically"
+            )
+            continue
+        if kind == "dup":
+            violations.append(f"aws_s3_bucket.{name}: tags attribute appears more than once")
+            continue
+        keys = data or {}
+        missing = [t for t in REQUIRED_TAGS if not present(keys.get(t, ""))]
         if missing:
             violations.append(f"aws_s3_bucket.{name}: missing tags {missing}")
     return (not violations), violations
 
 
-if __name__ == "__main__":
+def main():
+    if len(sys.argv) != 2:
+        print("usage: rubric.py <path-to-terraform-file>", file=sys.stderr)
+        return 2
+
     ok, violations = check(sys.argv[1])
     if ok:
         print(f"PASS: every bucket in {sys.argv[1]} carries {REQUIRED_TAGS}")
-        sys.exit(0)
+        return 0
     print(f"FAIL: {sys.argv[1]} does not meet the tagging rubric")
     for v in violations:
         print(" -", v)
-    sys.exit(1)
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
 ```
 
-**Run** it against a seeded failure first:
+A rubric is itself a claim, so it gets its own tests. `file: eval/test_rubric.py` holds
+fifteen: the fixtures below, a commented-out tags block, a block comment, the three names
+inside a string value, a `labels` map instead of `tags`, a neighbouring resource's tags, a
+`merge(...)` value, empty and `null` values, quoted keys, a single-line map, and comments
+with stray braces inside a real block. **Run** them:
+
+```
+python3 -m unittest discover -s eval -p 'test_*.py'
+```
+
+`[ Expected output ]`
+```
+...............
+----------------------------------------------------------------------
+Ran 15 tests in 0.007s
+
+OK
+```
+
+**Run** the rubric against a seeded failure first:
 
 ```
 python3 eval/rubric.py eval/fixture-bad.tf
@@ -289,6 +477,34 @@ FAIL: eval/fixture-bad.tf does not meet the tagging rubric
 
 `Exit code 1`. `reports` is missing `Owner` and `ManagedBy`, `backups` has no `tags` block
 at all.
+
+**Run** it against the fixture that has the right words in the wrong place:
+
+`file: eval/fixture-comment-only.tf`
+```
+# Required tags: Environment, Owner, ManagedBy
+# tags = {
+#   Environment = "lab"
+#   Owner       = "m09-lab"
+#   ManagedBy   = "terraform-module-conventions-skill"
+# }
+resource "aws_s3_bucket" "reports" {
+  bucket = "m09-eval-reports" // Owner and ManagedBy are set elsewhere, honest
+}
+```
+
+```
+python3 eval/rubric.py eval/fixture-comment-only.tf
+```
+
+`[ Expected output ]`
+```
+FAIL: eval/fixture-comment-only.tf does not meet the tagging rubric
+ - aws_s3_bucket.reports: missing tags ['Environment', 'Owner', 'ManagedBy']
+```
+
+`Exit code 1`. All three names are in the file. None of them is a key in a `tags` map, so
+none of them counts. An agent's explanation of what it tagged is a comment too.
 
 **Run** it against a fixed fixture:
 
@@ -348,8 +564,12 @@ cd modules/module-09-verifying-ai-infra/lab
 - Both scanners run against this project's own module and agree the starter is unhardened
 - The OPA policy fails on the starter module and passes on the solution
 - `pipeline.sh` blocks at stage 2 on the starter module and passes all five stages on the
-  solution
-- The eval rubric rejects `eval/fixture-bad.tf` and accepts `eval/fixture-good.tf`
+  solution, with checkov reporting the six inline waivers as skipped and no `--skip-check`
+  flag anywhere in the script
+- `conftest` on its own passes an empty plan JSON, which is why `pipeline.sh` checks
+  `terraform show -json` and the JSON itself before policy runs
+- The rubric's unit tests pass, and the rubric rejects `eval/fixture-bad.tf` and
+  `eval/fixture-comment-only.tf` while accepting `eval/fixture-good.tf`
 
 ## Summary
 

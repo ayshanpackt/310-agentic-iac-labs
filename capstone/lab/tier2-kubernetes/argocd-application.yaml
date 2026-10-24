@@ -6,7 +6,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/schoolofdevops/310-agentic-iac-labs.git
+    repoURL: https://github.com/PacktPublishing/The-AI-Driven-Infrastructure-as-Code-Handbook.git
     targetRevision: main
     path: capstone/lab/pipeline-demo
   destination:

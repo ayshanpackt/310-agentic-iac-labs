@@ -1,12 +1,64 @@
+# Design example. This file is NOT installed under .github/workflows/ in the
+# companion repository, so nothing runs on the schedule below. To try it, copy
+# it to .github/workflows/ in a repository with the same layout and run it by
+# hand from the Actions tab (workflow_dispatch). The schedule line shows what a
+# nightly trigger looks like; it only takes effect once the file is installed.
+#
+# Paths are relative to the companion repository root.
 name: m12-loop-trigger-example
+
 on:
+  workflow_dispatch: {}
   schedule:
     - cron: "0 2 * * *"
-  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  LOOP: modules/module-12-loop-multiagent-economics/lab/solution/loop.sh
+  WORK: m12-work
+
 jobs:
   run-loop:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.14.8
+          terraform_wrapper: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: install checkov, pinned
+        run: pip install checkov==3.3.30
+
+      # Cross-run state. The loop's state is its working copy. The first run copies
+      # the starter module; every later run restores the copy the previous run
+      # left behind, so run 2 sees the fix run 1 applied. restore-keys matches the
+      # newest cache whose key starts with the prefix; the exact key is unique per
+      # run so the post-job save always writes a fresh snapshot.
+      - name: restore the working copy from the previous run
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.WORK }}
+          key: m12-work-${{ github.run_id }}
+          restore-keys: |
+            m12-work-
+
       - name: run the stopping-condition loop once
-        run: bash lab/solution/loop.sh work
+        shell: bash
+        run: |
+          set +e
+          bash "$LOOP" "$GITHUB_WORKSPACE/$WORK"
+          code=$?
+          case "$code" in
+            0) echo "::notice::STOPPED, stopping condition met, nothing to do" ;;
+            1) echo "::notice::CONTINUE, fix applied, the next trigger re-checks" ;;
+            *) echo "::error::loop exited $code without a verdict, escalate to a human"
+               exit 1 ;;
+          esac
