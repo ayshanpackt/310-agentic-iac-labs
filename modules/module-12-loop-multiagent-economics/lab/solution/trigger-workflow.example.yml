@@ -1,27 +1,39 @@
 # Design example. This file is NOT installed under .github/workflows/ in the
-# companion repository, so nothing runs on the schedule below. To try it, copy
-# it to .github/workflows/ in a repository with the same layout and run it by
-# hand from the Actions tab (workflow_dispatch). The schedule line shows what a
-# nightly trigger looks like; it only takes effect once the file is installed.
+# companion repository, so nothing runs on the schedule below. To try it, copy it
+# to .github/workflows/ in a repository with the same layout, add the secret named
+# below, and run it by hand from the Actions tab (workflow_dispatch) before you
+# trust the schedule.
+#
+# What it does, once a night: copies the module under watch into a working copy,
+# wires the same verifier and Stop gate the lab builds, and runs one headless
+# Claude Code session. The gate, not the agent, decides when the session may stop.
+# The job never pushes. It uploads the diff and the loop's state for a human to
+# open as a pull request, so apply stays where Chapter 6 put it.
+#
+# Auth: CLAUDE_CODE_OAUTH_TOKEN is a long-lived token for a Claude subscription,
+# created once on your own machine with `claude setup-token`. No API key, no
+# per-token billing beyond the subscription.
 #
 # Paths are relative to the companion repository root.
-name: m12-loop-trigger-example
+name: m12-loop-nightly-example
 
 on:
   workflow_dispatch: {}
   schedule:
-    - cron: "0 2 * * *"
+    - cron: "30 1 * * *"
 
 permissions:
   contents: read
 
 env:
-  LOOP: modules/module-12-loop-multiagent-economics/lab/solution/loop.sh
+  LAB: modules/module-12-loop-multiagent-economics/lab
+  TARGET: modules/module-12-loop-multiagent-economics/lab/starter
   WORK: m12-work
 
 jobs:
   run-loop:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -34,31 +46,52 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: install checkov, pinned
-        run: pip install checkov==3.3.30
-
-      # Cross-run state. The loop's state is its working copy. The first run copies
-      # the starter module; every later run restores the copy the previous run
-      # left behind, so run 2 sees the fix run 1 applied. restore-keys matches the
-      # newest cache whose key starts with the prefix; the exact key is unique per
-      # run so the post-job save always writes a fresh snapshot.
-      - name: restore the working copy from the previous run
-        uses: actions/cache@v4
+      - uses: actions/setup-node@v4
         with:
-          path: ${{ env.WORK }}
-          key: m12-work-${{ github.run_id }}
-          restore-keys: |
-            m12-work-
+          node-version: "22"
 
-      - name: run the stopping-condition loop once
-        shell: bash
+      - name: install checkov and Claude Code, pinned
         run: |
-          set +e
-          bash "$LOOP" "$GITHUB_WORKSPACE/$WORK"
-          code=$?
-          case "$code" in
-            0) echo "::notice::STOPPED, stopping condition met, nothing to do" ;;
-            1) echo "::notice::CONTINUE, fix applied, the next trigger re-checks" ;;
-            *) echo "::error::loop exited $code without a verdict, escalate to a human"
-               exit 1 ;;
+          pip install checkov==3.3.30
+          npm install -g @anthropic-ai/claude-code@2.1.308
+
+      - name: build the working copy and wire the loop into it
+        run: |
+          cp -r "$TARGET" "$WORK"
+          bash "$LAB/loop/install.sh" "$WORK"
+          git -C "$WORK" init -q
+          git -C "$WORK" add -A
+          git -C "$WORK" -c user.email=loop@example.com -c user.name=loop commit -qm "nightly baseline"
+
+      - name: run one gated session
+        working-directory: ${{ env.WORK }}
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          LOOP_MAX_BLOCKS: "5"
+        run: |
+          claude -p "Run loop/verify.sh. If it reports NOT DONE, fix the infrastructure it names. Never suppress a finding." \
+            --permission-mode acceptEdits \
+            --allowedTools "Read,Edit,Write,Bash(loop/verify.sh),Bash(terraform *),Bash(checkov *)" \
+            --max-turns 30 --output-format stream-json --verbose > run.jsonl
+          python3 "$GITHUB_WORKSPACE/$LAB/loop/trace.py" run.jsonl | tail -1
+
+      - name: decide the job's colour from the loop's own state, not the agent's words
+        working-directory: ${{ env.WORK }}
+        run: |
+          cat .loop/state.md
+          last=$(tail -1 .loop/state.md)
+          case "$last" in
+            "- done "*) echo "::notice::loop reached DONE" ;;
+            *) echo "::error::loop ended without DONE: $last"; exit 1 ;;
           esac
+          git diff > loop.diff
+
+      - name: hand the proposal to a human
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: m12-loop-${{ github.run_id }}
+          path: |
+            ${{ env.WORK }}/loop.diff
+            ${{ env.WORK }}/.loop/state.md
+            ${{ env.WORK }}/run.jsonl

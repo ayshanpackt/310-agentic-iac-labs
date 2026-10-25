@@ -1,101 +1,139 @@
+#!/usr/bin/env bash
+# run.sh -- validates Project 12 for real, without calling an agent by default.
+#
+#   ./run.sh                     verifier, Stop gate, guard, budget cap, FinOps gate, workflow lint
+#   M12_LIVE_AGENT=1 ./run.sh    also runs one real gated Claude Code session on the starter
+#
+# Requires terraform, checkov, python3 with PyYAML. actionlint is used when present.
 set -uo pipefail
 cd "$(dirname "$0")"
-fail(){ echo "FAIL: $*" >&2; rm -rf solution/work solution/work-broken; exit 1; }
+LAB="$PWD"
+TMP=$(mktemp -d)
+fail(){ echo "FAIL: $*" >&2; rm -rf "$TMP"; exit 1; }
 sha(){ shasum -a 256 "$1" | cut -d' ' -f1; }
+newcopy(){ # newcopy <name> <source-dir>: a fresh git working copy with the loop installed
+  cp -r "$2" "$TMP/$1" && bash loop/install.sh "$TMP/$1" >/dev/null || fail "install.sh failed for $1"
+  (cd "$TMP/$1" && git init -q && git add -A && git -c user.email=lab@example.com -c user.name=lab commit -qm base) \
+    || fail "git init failed for $1"
+}
 
-rm -rf solution/work solution/work-broken
+for t in terraform checkov python3 git; do
+  command -v "$t" >/dev/null 2>&1 || fail "$t is not on PATH"
+done
 
-echo "==> 1. trigger config: valid workflow, real 5-field cron, workflow_dispatch, loop path resolves"
-python3 -c "
+echo "==> 1. verifier on the starter: NOT DONE, both hardcoded keys named"
+newcopy starter starter
+OUT=$("$TMP/starter/loop/verify.sh" 2>&1); CODE=$?
+[ "$CODE" -eq 1 ] || fail "expected exit 1 on the starter, got $CODE: $OUT"
+echo "$OUT" | grep -q "/main.tf:" || fail "verifier did not name the key in main.tf"
+echo "$OUT" | grep -q "/shipper.tf:" || fail "verifier did not name the key in shipper.tf"
+echo "    ok, exit 1, main.tf and shipper.tf both reported"
+
+echo "==> 2. verifier on the solution: DONE"
+newcopy solution solution
+OUT=$("$TMP/solution/loop/verify.sh" 2>&1); CODE=$?
+[ "$CODE" -eq 0 ] || fail "expected exit 0 on the solution, got $CODE: $OUT"
+echo "    ok, exit 0"
+
+echo "==> 3. a suppression is not a fix: checkov:skip on the solution must be NOT DONE"
+newcopy skipped starter
+python3 - "$TMP/skipped/main.tf" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p).read()
+s = s.replace('variable "log_shipper_key" {', 'variable "log_shipper_key" {\n  #checkov:skip=CKV_SECRET_2:release cut', 1)
+open(p, "w").write(s)
+PY
+OUT=$("$TMP/skipped/loop/verify.sh" 2>&1); CODE=$?
+[ "$CODE" -eq 1 ] || fail "expected exit 1 with a checkov:skip comment, got $CODE: $OUT"
+echo "$OUT" | grep -q "suppression, not a fix" || fail "verifier did not name the suppression"
+echo "    ok, exit 1, suppression named"
+
+echo "==> 4. no verdict: a broken provider block must exit 2, not 0 or 1"
+newcopy broken starter
+sed -i.bak 's#hashicorp/local#hashicorp/no-such-provider-m12#' "$TMP/broken/main.tf" && rm "$TMP/broken/main.tf.bak"
+OUT=$("$TMP/broken/loop/verify.sh" 2>&1); CODE=$?
+[ "$CODE" -eq 2 ] || fail "expected exit 2 on a broken provider, got $CODE: $OUT"
+echo "$OUT" | grep -q "^NO VERDICT: terraform init failed" || fail "expected a no-verdict message, got: $OUT"
+echo "    ok, exit 2"
+
+echo "==> 5. Stop gate on the starter: blocks with exit 2, names the findings, records the block"
+OUT=$(echo '{"hook_event_name":"Stop","stop_hook_active":false}' | "$TMP/starter/loop/hooks/stop-gate.sh" 2>&1); CODE=$?
+[ "$CODE" -eq 2 ] || fail "expected the gate to block with exit 2, got $CODE"
+echo "$OUT" | grep -q "shipper.tf" || fail "gate reason did not carry the verifier's findings"
+grep -q "^- blocked " "$TMP/starter/.loop/state.md" || fail "gate did not record the block in .loop/state.md"
+echo "    ok, exit 2, findings passed back, block recorded"
+
+echo "==> 6. Stop gate on the solution: lets the agent stop, records DONE"
+echo '{}' | "$TMP/solution/loop/hooks/stop-gate.sh" >/dev/null 2>&1; CODE=$?
+[ "$CODE" -eq 0 ] || fail "expected the gate to allow stopping on the solution, got $CODE"
+grep -q "^- done " "$TMP/solution/.loop/state.md" || fail "gate did not record DONE"
+echo "    ok, exit 0, done recorded"
+
+echo "==> 7. budget cap: after LOOP_MAX_BLOCKS blocks the gate stops the loop without DONE"
+for i in 1 2; do echo '{}' | LOOP_MAX_BLOCKS=2 "$TMP/starter/loop/hooks/stop-gate.sh" >/dev/null 2>&1; done
+OUT=$(echo '{}' | LOOP_MAX_BLOCKS=2 "$TMP/starter/loop/hooks/stop-gate.sh" 2>&1); CODE=$?
+[ "$CODE" -eq 0 ] || fail "expected the gate to release at the cap, got $CODE"
+tail -1 "$TMP/starter/.loop/state.md" | grep -q "^- budget exhausted" || fail "cap not recorded as budget exhausted"
+echo "    ok, released at the cap, recorded as budget exhausted, never as done"
+
+echo "==> 8. Stop gate with no verdict: lets the session end and records it, never as done"
+echo '{}' | "$TMP/broken/loop/hooks/stop-gate.sh" >/dev/null 2>&1; CODE=$?
+[ "$CODE" -eq 0 ] || fail "expected the gate to end the session on no verdict, got $CODE"
+tail -1 "$TMP/broken/.loop/state.md" | grep -q "^- no verdict" || fail "no-verdict not recorded"
+echo "    ok"
+
+echo "==> 9. guard: the agent may edit main.tf but not the verifier, the hooks or the loop state"
+for p in loop/verify.sh loop/hooks/stop-gate.sh .claude/settings.json .codex/hooks.json .loop/state.md; do
+  printf '{"tool_input":{"file_path":"%s"}}' "$TMP/starter/$p" | "$TMP/starter/loop/hooks/guard-oracle.sh" 2>/dev/null
+  [ $? -eq 2 ] || fail "guard allowed an edit to $p"
+done
+printf '{"tool_input":{"file_path":"%s"}}' "$TMP/starter/main.tf" | "$TMP/starter/loop/hooks/guard-oracle.sh" || fail "guard blocked main.tf"
+echo "    ok, five protected paths blocked, main.tf allowed"
+
+echo "==> 10. trace.py reads a real captured run"
+python3 loop/trace.py evidence/stage3-hook.jsonl | tail -1 | grep -q "^turns " || fail "trace.py could not read evidence/stage3-hook.jsonl"
+echo "    ok"
+
+echo "==> 11. FinOps gate: fixtures"
+python3 finops/gate.py finops/plan-over-budget.json >/dev/null && fail "gate should have rejected plan-over-budget.json"
+python3 finops/gate.py finops/plan-in-budget.json >/dev/null || fail "gate should have accepted plan-in-budget.json"
+python3 finops/gate.py finops/plan-empty.json >/dev/null 2>&1; [ $? -eq 2 ] || fail "gate should refuse plan-empty.json with exit 2"
+python3 finops/gate.py finops/plan-nested.json >/dev/null; [ $? -eq 1 ] || fail "gate should reject the child-module violation"
+python3 finops/test_gate.py >/dev/null 2>&1 || fail "finops/test_gate.py failed"
+echo "    ok, rejects, accepts, refuses an invalid plan, walks child modules, unit tests pass"
+
+echo "==> 12. nightly workflow example: valid YAML, real cron, manual dispatch, paths resolve"
+python3 - <<'PY' || fail "workflow example invalid"
 import os, yaml
-d = yaml.safe_load(open('solution/trigger-workflow.example.yml'))
-cron = d[True]['schedule'][0]['cron']
-parts = cron.split()
-assert len(parts) == 5, 'not a real 5-field cron expression'
-assert 'workflow_dispatch' in d[True]
-loop = d['env']['LOOP']
-repo_root = os.path.abspath(os.path.join(os.getcwd(), '..', '..', '..'))
-assert os.path.isfile(os.path.join(repo_root, loop)), 'workflow points at a loop.sh that does not exist: ' + loop
-print('    ok, cron:', cron, '| loop path:', loop)
-" || fail "trigger config invalid"
+d = yaml.safe_load(open("solution/trigger-workflow.example.yml"))
+on = d[True]
+assert len(on["schedule"][0]["cron"].split()) == 5 and "workflow_dispatch" in on
+root = os.path.abspath("../../..")
+for key in ("LAB", "TARGET"):
+    assert os.path.isdir(os.path.join(root, d["env"][key])), key + " does not resolve"
+print("    ok, cron:", on["schedule"][0]["cron"])
+PY
 if command -v actionlint >/dev/null 2>&1; then
   actionlint solution/trigger-workflow.example.yml || fail "actionlint rejected the workflow"
   echo "    ok, actionlint clean"
 else
-  echo "    (actionlint not installed, skipping the workflow lint)"
+  echo "    (actionlint not installed, lint skipped)"
 fi
 
-echo "==> 2. run 1: stopping condition not yet met, must CONTINUE"
-OUT1=$(bash solution/loop.sh solution/work 2>&1)
-echo "$OUT1" | grep -q "^CONTINUE:" || fail "run 1 should have printed CONTINUE, got: $OUT1"
-echo "    ok"
+if [ "${M12_LIVE_AGENT:-0}" = "1" ]; then
+  echo "==> 13. live: one gated Claude Code session on the starter must end with DONE"
+  command -v claude >/dev/null || fail "claude not on PATH"
+  newcopy live starter
+  (cd "$TMP/live" && claude -p "The log shipper's AWS key is hardcoded as the variable default in main.tf. Take it out of main.tf." \
+     --permission-mode acceptEdits \
+     --allowedTools "Read,Edit,Write,Bash(terraform *),Bash(checkov *),Bash(loop/verify.sh*),Bash(git diff*)" \
+     --output-format stream-json --verbose > run.jsonl 2>&1)
+  python3 loop/trace.py "$TMP/live/run.jsonl" | tail -1
+  tail -1 "$TMP/live/.loop/state.md" | grep -q "^- done " || fail "live loop did not end with DONE: $(tail -1 "$TMP/live/.loop/state.md")"
+  "$TMP/live/loop/verify.sh" >/dev/null 2>&1 || fail "live loop recorded DONE but verify.sh disagrees"
+  echo "    ok, the gate recorded DONE and an independent verify.sh agrees"
+fi
 
-echo "==> 3. run 2: same work dir, real fix now applied, must STOP"
-OUT2=$(bash solution/loop.sh solution/work 2>&1)
-echo "$OUT2" | grep -q "^STOPPED:" || fail "run 2 should have printed STOPPED, got: $OUT2"
-echo "    ok"
-
-echo "==> 4. run 3: already stopped, re-trigger must be idempotent, still STOPPED"
-OUT3=$(bash solution/loop.sh solution/work 2>&1)
-echo "$OUT3" | grep -q "^STOPPED:" || fail "run 3 should still be STOPPED, got: $OUT3"
-echo "    ok"
-
-rm -rf solution/work
-
-echo "==> 5. negative: PATH without checkov, loop must exit 2 and leave main.tf alone"
-SHIM=$(mktemp -d)
-for t in bash terraform python3 cp grep dirname shasum cut; do
-  ln -s "$(command -v $t)" "$SHIM/$t"
-done
-cp -r starter solution/work
-BEFORE=$(sha solution/work/main.tf)
-OUT5=$(PATH="$SHIM" bash solution/loop.sh solution/work 2>&1); CODE5=$?
-rm -rf "$SHIM"
-[ "$CODE5" -eq 2 ] || fail "expected exit 2 without checkov, got $CODE5: $OUT5"
-echo "$OUT5" | grep -q "^ERROR: checkov not on PATH" || fail "expected a checkov-missing error, got: $OUT5"
-echo "$OUT5" | grep -qE "^(CONTINUE|STOPPED):" && fail "loop gave a verdict without checkov: $OUT5"
-[ "$(sha solution/work/main.tf)" = "$BEFORE" ] || fail "main.tf changed although checkov was missing"
-echo "    ok, exit 2, main.tf byte-identical"
-rm -rf solution/work
-
-echo "==> 6. negative: broken provider block, terraform init fails, loop must exit 2 and leave main.tf alone"
-cp -r starter solution/work-broken
-sed -i.bak 's#hashicorp/local#hashicorp/no-such-provider-m12#' solution/work-broken/main.tf && rm solution/work-broken/main.tf.bak
-BEFORE=$(sha solution/work-broken/main.tf)
-OUT6=$(bash solution/loop.sh solution/work-broken 2>&1); CODE6=$?
-[ "$CODE6" -eq 2 ] || fail "expected exit 2 on a broken provider block, got $CODE6: $OUT6"
-echo "$OUT6" | grep -q "^ERROR: terraform init failed" || fail "expected a terraform init error, got: $OUT6"
-echo "$OUT6" | grep -qE "^(CONTINUE|STOPPED):" && fail "loop gave a verdict although init failed: $OUT6"
-[ "$(sha solution/work-broken/main.tf)" = "$BEFORE" ] || fail "main.tf changed although terraform init failed"
-grep -q 'default     = "AKIA' solution/work-broken/main.tf || fail "the hardcoded key was removed despite the tool error"
-echo "    ok, exit 2, main.tf byte-identical, hardcoded key still in place"
-rm -rf solution/work-broken
-
-echo "==> 7. negative: checkov crashes mid-scan, loop must exit 2 and leave main.tf alone"
-SHIM=$(mktemp -d)
-printf '#!/bin/sh\necho "Traceback (most recent call last): simulated checkov crash" >&2\nexit 3\n' > "$SHIM/checkov"
-chmod +x "$SHIM/checkov"
-cp -r starter solution/work
-BEFORE=$(sha solution/work/main.tf)
-OUT7=$(PATH="$SHIM:$PATH" bash solution/loop.sh solution/work 2>&1); CODE7=$?
-rm -rf "$SHIM"
-[ "$CODE7" -eq 2 ] || fail "expected exit 2 on a checkov crash, got $CODE7: $OUT7"
-echo "$OUT7" | grep -q "^ERROR: checkov exited 3 without a verdict" || fail "expected a no-verdict error, got: $OUT7"
-[ "$(sha solution/work/main.tf)" = "$BEFORE" ] || fail "main.tf changed although checkov crashed"
-echo "    ok, exit 2, main.tf byte-identical"
-rm -rf solution/work
-
-echo "==> 8. FinOps gate: fixtures"
-python3 finops/gate.py finops/plan-over-budget.json && fail "gate should have rejected plan-over-budget.json"
-python3 finops/gate.py finops/plan-in-budget.json || fail "gate should have accepted plan-in-budget.json"
-python3 finops/gate.py finops/plan-empty.json; [ $? -eq 2 ] || fail "gate should have refused to evaluate plan-empty.json with exit 2"
-python3 finops/gate.py finops/plan-nested.json; [ $? -eq 1 ] || fail "gate should have rejected the child-module violation in plan-nested.json"
-echo "    ok, gate rejects over-budget, accepts in-budget, refuses empty, walks child modules"
-
-echo "==> 9. FinOps gate: unit tests (invalid structure, child modules, absent tags field, passing case)"
-python3 finops/test_gate.py 2>&1 | tail -3
-[ "${PIPESTATUS[0]}" -eq 0 ] || fail "finops/test_gate.py failed"
-echo "    ok"
-
+rm -rf "$TMP"
 echo
-echo "LAB PASSED -- stopping-condition loop: run 1 continues and applies the real fix, run 2 stops, run 3 is idempotent; three tool-failure runs exit 2 with main.tf untouched; FinOps gate rejects, accepts, refuses an invalid plan, and walks child modules"
+echo "LAB PASSED -- verifier: two findings, done, suppression refused, no verdict; Stop gate blocks, releases, caps, records; guard protects the loop; FinOps gate and workflow example valid"

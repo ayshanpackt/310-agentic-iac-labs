@@ -1,0 +1,11 @@
+  PreToolUse hooks
+  1 hook needs review before it can run.
+› [!]  1  Unnamed hook · new
+  Event     PreToolUse
+  Matcher   apply_patch|Edit|Write
+  Source    Project config - /Users/gshah/work/courses/310-packt/modules/module-12-loop-multiagent-economics/lab/work-codex/.codex/hooks.json
+  Command   bash "$(git rev-parse --show-toplevel)/loop/hooks/guard-oracle.sh"
+  Mode      Sync
+  Timeout   600s
+  Trust     New hook - review required
+  t trust · esc back

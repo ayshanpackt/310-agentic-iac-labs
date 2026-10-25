@@ -1,339 +1,506 @@
-# Project 12: Build a Self-Healing Compliance Loop With a GitHub Actions Trigger
+# Project 12: Build an Infrastructure Loop That Only the Pipeline Can End Using Claude Code and Codex
 
-**Tier 0** · ~20 min · no cloud, no cluster, no new account. Reuses the same small Terraform
-module from Project 01, this time run under a loop instead of by hand.
+**Tier 0** · ~40 min · Terraform with the `local` provider, Checkov, Claude Code and Codex. No cloud
+account, no cluster.
 
-In this project, you will build a small unattended loop: a script that checks one exact
-condition, fixes it if it isn't met, does nothing once it already is, and refuses to touch
-anything when one of its own tools fails. Then you will write the GitHub Actions workflow that
-would run it on a schedule, and validate that workflow the same way you validated the loop.
+In this project, you will put a real agent inside a real loop and decide what is allowed to end
+it. You will run the same fix twice, once with Claude Code's `/goal` judging "done" from the
+conversation and once with a Stop hook that runs the scanner against the files. Then you will wire
+the same gate into Codex, watch an untrusted hook skip without a word, put the loop on a clock and
+catch drift with it, and read what every run cost.
 
 **What you're building, at a glance:**
 
-- A stopping-condition script that checks exactly one thing: does `checkov` exit 0
-- A real fix, applied automatically the moment the condition isn't met: a hardcoded secret
-  pulled out of a Terraform variable
-- Three real runs against the same working copy, three different outcomes: continue-and-fix,
-  stop, stay stopped
-- A fourth run where `terraform init` fails on purpose, proving the loop exits without a
-  verdict and leaves `main.tf` byte-identical
-- A GitHub Actions `schedule:` workflow, linted with `actionlint`, kept as a design example
-  that runs on `workflow_dispatch` and is not enabled in the companion repository
-- A FinOps gate that checks resource count, tags, and instance type straight from
-  `terraform show -json`, walks nested modules, refuses a plan it cannot read, and has its own
-  unit tests, no Infracost API key required
+- `loop/verify.sh`, a stopping condition with three answers: done, not done, no verdict
+- A Stop hook that lets the agent stop only when `verify.sh` says done, and a guard hook that stops
+  the agent editing the loop itself, installed for both runtimes by one script
+- Real runs of a model-judged loop and a gate-judged loop on the same starter, with their traces
+- The same gate in Codex, trusted with `/hooks`
+- A two-minute `/loop` that catches a drifted commit and fixes it
+- The cost of every run, read from the runtime's own event stream, and a FinOps gate for plans
 
 ## Pre Requisites
 
-- `terraform` and `checkov`, same as every earlier Tier 0/1 project in this course
-- `python3` and `PyYAML` (installed per Environment Setup) to validate the trigger config
-- `actionlint` is optional. `brew install actionlint` on a Mac. If it is missing, `run.sh`
-  skips that one check and says so
+- `terraform` and `checkov`, same as every earlier Tier 0 project in this course
+- Claude Code and Codex, signed in with your subscriptions, from Project 02
+- `python3` with `PyYAML`, and `git`
+- `actionlint` is optional; `run.sh` skips the workflow lint without it
+
+All commands start in the module directory of your clone:
+
+```
+cd modules/module-12-loop-multiagent-economics
+```
 
 ## The starter module
 
-`file: modules/module-12-loop-multiagent-economics/lab/starter/main.tf`
+The module under the loop renders two config files for a log-shipping sidecar. It has two
+hardcoded AWS keys: one as a variable default in `main.tf`, and one inside the config template in
+`shipper.tf`.
+
+`file: lab/starter/shipper.tf`
 ```
-terraform {
-  required_providers {
-    local = {
-      source  = "hashicorp/local"
-      version = "~> 2.5"
-    }
-  }
-}
-
-variable "log_shipper_key" {
-  description = "AWS key for the sidecar that ships access logs to S3"
-  type        = string
-  default     = "AKIAABCDEFGHIJKLMNOP"
-}
-
-resource "local_file" "log_shipper_env" {
-  filename = "${path.module}/rendered/log-shipper.env"
-  content  = "AWS_ACCESS_KEY_ID=${var.log_shipper_key}\n"
+# Config file the log-shipper sidecar reads at boot.
+resource "local_file" "shipper_config" {
+  filename = "${path.module}/rendered/shipper.yaml"
+  content  = <<-EOT
+    region: ap-south-1
+    bucket: kiranakart-access-logs
+    access_key_id: AKIAZ7Q4R2M8N5T1W3Y6
+  EOT
 }
 ```
 
-Same starter as Project 01's, the same hardcoded key, on purpose. This time you are not fixing
-it by hand. You are writing a loop that fixes it.
+The second file is the point of the exercise. You will only ever ask the agent about the first.
 
-## Step 1: Write the stopping condition
+## Stage 1: Build the stopping condition
 
-A real stopping condition is a script that answers exactly one question: has the target state
-been reached, yes or no, checkably. It also has to know when it cannot answer. Here's the
-whole thing:
+### Step 1: Read the verifier
 
-`file: lab/solution/loop.sh`
+`file: lab/loop/verify.sh`
 ```
+#!/usr/bin/env bash
+# verify.sh -- the loop's stopping condition. Deterministic, one question, three answers.
+# It lives in loop/ inside the working copy and always checks the working copy's root.
+#   exit 0  DONE      terraform validates and checkov reports no failed checks
+#   exit 1  NOT DONE  checkov reports failed checks; they are printed on stderr
+#   exit 2  NO VERDICT a tool is missing or failed, so nothing can be concluded
 set -uo pipefail
-HERE="$(cd "$(dirname "$0")" && pwd)"
-WORK_DIR="${1:-$HERE/work}"
-
-# Exit codes, one meaning each:
-#   0  STOPPED   stopping condition met, nothing to do
-#   1  CONTINUE  stopping condition not met, the fix was applied, re-trigger
-#   2  ERROR     a tool failed or is missing, so there is no verdict and main.tf is untouched
-die() { echo "ERROR: $*" >&2; exit 2; }
-
-for tool in terraform checkov python3; do
-  command -v "$tool" >/dev/null 2>&1 || die "$tool not on PATH, cannot evaluate the stopping condition"
-done
-
-if [ ! -d "$WORK_DIR" ]; then
-  cp -r "$HERE/../starter" "$WORK_DIR"
+cd "$(dirname "$0")/.."   # the working copy this loop owns
+no_verdict(){ echo "NO VERDICT: $*" >&2; exit 2; }
+for t in terraform checkov; do command -v "$t" >/dev/null 2>&1 || no_verdict "$t not on PATH"; done
+# A suppression is not a fix. An agent told "make the scan pass" can reach for a
+# checkov:skip comment; this loop does not accept one.
+if grep -rn --include='*.tf' 'checkov:skip' . >/dev/null 2>&1; then
+  echo "NOT DONE: a checkov:skip comment is a suppression, not a fix. Remove it and fix the finding:" >&2
+  grep -rn --include='*.tf' 'checkov:skip' . >&2
+  exit 1
 fi
-
-cd "$WORK_DIR"
-[ -f main.tf ] || die "no main.tf in $WORK_DIR, nothing to check"
-terraform init -backend=false -input=false -no-color >/dev/null 2>&1 \
-  || die "terraform init failed in $WORK_DIR, cannot evaluate the stopping condition"
-terraform validate -no-color >/dev/null 2>&1 \
-  || die "terraform validate failed in $WORK_DIR, cannot evaluate the stopping condition"
-
-CHECKOV_OUT=$(checkov -d . --compact --quiet 2>&1)
-CHECKOV_CODE=$?
-
-if [ "$CHECKOV_CODE" -eq 0 ]; then
-  echo "STOPPED: stopping condition met, checkov exits 0"
-  exit 0
+terraform init -backend=false -input=false -no-color >/dev/null 2>&1 || no_verdict "terraform init failed"
+terraform validate -no-color >/dev/null 2>&1 || no_verdict "terraform validate failed"
+out=$(checkov -d . --framework terraform,secrets --compact --quiet 2>&1); code=$?
+[ "$code" -eq 0 ] && { echo "DONE: terraform validates, checkov reports no failed checks"; exit 0; }
+if [ "$code" -eq 1 ] && echo "$out" | grep -q "FAILED for resource"; then
+  echo "NOT DONE: checkov still reports failed checks:" >&2
+  echo "$out" | grep -E "^Check: |FAILED for resource|File: " >&2
+  exit 1
 fi
-
-# checkov exits 1 only for failed checks. Any other code, or a 1 with no failed
-# check in the output, is a scanner problem, not a verdict on main.tf.
-if [ "$CHECKOV_CODE" -ne 1 ] || ! echo "$CHECKOV_OUT" | grep -q "FAILED for resource"; then
-  die "checkov exited $CHECKOV_CODE without a verdict: $(echo "$CHECKOV_OUT" | tail -1)"
-fi
-
-echo "CONTINUE: stopping condition not met yet, checkov still failing"
+no_verdict "checkov exited $code without a verdict"
 ```
 
-Read the check. `checkov -d .` on the current working copy, and its exit code, nothing else. An
-exit code either is 0 or it isn't. A human deciding something "looks done" doesn't enter into it.
+One question, three answers. Exit 0 is done. Exit 1 is not done, with the findings on standard
+error. Exit 2 is no verdict: a tool is missing or Terraform cannot even initialise, so nothing can
+be concluded. A `checkov:skip` comment counts as not done, because a suppression is not a fix.
 
-Now read what sits around the check. Three exit codes, one meaning each. The tools are
-confirmed on `PATH` before anything runs. `terraform init` and `terraform validate` have to
-succeed before `checkov` is even asked, because a scanner pointed at a directory it cannot
-parse has nothing to say about that directory. Any one of those failing ends the run with exit
-code 2 and no verdict. A missing tool is a reason to stop and tell a human. It is never a reason
-to edit `main.tf`.
-
-**Run it once**, from a fresh copy:
+### Step 2: Make a working copy and install the loop
 
 ```
-bash lab/solution/loop.sh /tmp/m12-try
+cp -r lab/starter work
+bash lab/loop/install.sh work
+cd work
+git init -q && git add -A && git commit -qm starter
 ```
 
-`[ Expected output ]`
 ```
-CONTINUE: stopping condition not met yet, checkov still failing
+loop installed in work: verifier, Stop gate, verifier guard, Claude Code and Codex hook config
 ```
 
-Exactly what you'd expect. The starter still has the hardcoded key. The loop noticed, and said
-so, in a form a machine can act on.
+`install.sh` copies the verifier and both hooks into `work/loop/`, and registers the hooks in
+`work/.claude/settings.json` for Claude Code and `work/.codex/hooks.json` for Codex. The working
+copy is its own git repository on purpose. The loop's state lives in it, and Codex finds its hooks
+from its root.
 
-## Step 2: Give the loop something to do when it continues
+### Step 3: Ask the verifier
 
-A loop that only reports "not done yet" needs something to act on that report. In a real setup
-that's an agent, gated by the plan-review-approve-apply harness M06 built. For this project,
-wire in the exact fix you already know from Project 01, real code, applied for real when the
-condition isn't met:
-
-`edit file: lab/solution/loop.sh`
 ```
-echo "CONTINUE: stopping condition not met yet, checkov still failing"
-if grep -q 'default     = "AKIA' main.tf 2>/dev/null; then
-  python3 -c "
-h = open('main.tf').read()
-h = h.replace('  default     = \"AKIAABCDEFGHIJKLMNOP\"\n', '  sensitive   = true\n')
-open('main.tf','w').write(h)
-"
-  echo "  (applied the real fix: pulled the hardcoded key, marked the variable sensitive)"
-fi
+bash loop/verify.sh; echo "exit $?"
+```
+
+```
+NOT DONE: checkov still reports failed checks:
+Check: CKV_SECRET_2: "AWS Access Key"
+	FAILED for resource: abac545fc3bf803134bc8f78fb6160a5c6a87b26
+	File: /main.tf:15-16
+Check: CKV_SECRET_2: "AWS Access Key"
+	FAILED for resource: dd2709fa7eee829995341383d3a22fc137c72987
+	File: /shipper.tf:7-8
 exit 1
 ```
 
-The fix sits after every tool check and after the verdict. The script can only reach this
-block once `checkov` has run to completion and reported a failed check. There is no path from
-"a tool broke" to "edit the file".
+Two findings, two files. Keep this output in mind for the next two stages.
 
-## Step 3: Run it three times, watch it change state each time
+## Stage 2: A loop the model judges
 
-The same command you already ran, run again against the **same** working copy this time,
-`solution/work` instead of a throwaway `/tmp` path:
+### Step 1: Run `/goal` on a fresh copy, no hooks
 
-```
-rm -rf lab/solution/work
-bash lab/solution/loop.sh lab/solution/work
-```
-
-`[ Expected output ]`
-```
-CONTINUE: stopping condition not met yet, checkov still failing
-  (applied the real fix: pulled the hardcoded key, marked the variable sensitive)
-```
-
-Run **the exact same command again**, no other change:
+Go back to the module directory and make a second copy, without the loop installed:
 
 ```
-bash lab/solution/loop.sh lab/solution/work
+cd ..
+cp -r lab/starter work-goal && cd work-goal
+git init -q && git add -A && git commit -qm starter
+claude -p "/goal The hardcoded AWS key for the log shipper is out of main.tf, and checkov reports no failed checks for this directory. Stop after 6 turns." \
+  --permission-mode acceptEdits --allowedTools "Read,Edit,Write,Bash(terraform *),Bash(checkov *),Bash(git diff*),Bash(ls*),Bash(cat *),Bash(grep *),Bash(loop/verify.sh*),Bash(bash loop/verify.sh*)" \
+  --output-format stream-json --verbose > run.jsonl
 ```
 
-`[ Expected output ]`
-```
-STOPPED: stopping condition met, checkov exits 0
-```
-
-Run it a **third** time:
+`/goal` keeps the session working until a separate small model, reading the conversation after
+each turn, judges the condition met. Read what happened:
 
 ```
-bash lab/solution/loop.sh lab/solution/work
+python3 ../lab/loop/trace.py run.jsonl
 ```
 
-`[ Expected output ]`
 ```
-STOPPED: stopping condition met, checkov exits 0
-```
-
-Same command, three real runs, three different outcomes: continue-and-fix, stop, stop-again.
-That third run is the one people forget to test. A trigger that fires after the work is already
-done should notice that immediately and do nothing, not re-run the fix, not error out.
-`echo $?` after each run: `1`, then `0`, then `0`.
-
-## Step 4: Break a tool, prove the loop keeps its hands off main.tf
-
-A loop that runs unattended will, sooner or later, run on a night when a tool is broken: a
-provider registry is down, a scanner upgrade changed its exit codes, a runner image lost a
-binary. The question is what the loop does on that night. Prove the answer. Copy the starter,
-break the provider block so `terraform init` cannot succeed, and record a checksum of
-`main.tf` before the run:
-
-```
-rm -rf /tmp/m12-broken
-cp -r lab/starter /tmp/m12-broken
-sed -i.bak 's#hashicorp/local#hashicorp/no-such-provider-m12#' /tmp/m12-broken/main.tf
-shasum -a 256 /tmp/m12-broken/main.tf
-bash lab/solution/loop.sh /tmp/m12-broken; echo "exit $?"
-shasum -a 256 /tmp/m12-broken/main.tf
+  1. Bash   pwd; ls -la; cat main.tf; ls *.tf; which checkov
+  2. Bash   cat shipper.tf .gitignore; checkov -d . --compact 2>&1 | tail -40
+  3. Bash   cat > main.tf <<'EOF'
+  4. Read   main.tf
+  5. Read   shipper.tf
+  6. Edit   main.tf
+  7. Edit   shipper.tf
+  8. Edit   shipper.tf
+  9. Bash   checkov -d . --compact 2>&1 | grep -E "Passed|Failed|FAILED"; grep -rn AKIA . --exclude-di
+ 10. Bash   checkov -d . --compact
+     >> sent back to work (1): [The hardcoded AWS key for the log shipper is out of main.tf, and checkov reports no failed checks f
+ 11. Bash   checkov -d . -o json
+ 12. Bash   grep -rn AKIA . --exclude-dir=.git
+     >> sent back to work (2): [The hardcoded AWS key for the log shipper is out of main.tf, and checkov reports no failed checks f
+ 13. Bash   checkov -d . --framework terraform secrets -o json
+     >> sent back to work (3): [The hardcoded AWS key for the log shipper is out of main.tf, and checkov reports no failed checks f
+     >> sent back to work (4): [The hardcoded AWS key for the log shipper is out of main.tf, and checkov reports no failed checks f
+turns 18  stop-blocks 4  seconds 113  cost_usd 0.3981
 ```
 
-`[ Expected output ]`
-```
-6edfa1da7fe7e4bb4d4f489089eff16b23ac01bbfc53986552181aa7d2d7281b  /tmp/m12-broken/main.tf
-ERROR: terraform init failed in /tmp/m12-broken, cannot evaluate the stopping condition
-exit 2
-6edfa1da7fe7e4bb4d4f489089eff16b23ac01bbfc53986552181aa7d2d7281b  /tmp/m12-broken/main.tf
-```
-
-Exit code 2, no `CONTINUE`, no `STOPPED`, and the two checksums match. The hardcoded key is
-still in the file, because the loop never earned the right to remove it. `run.sh` repeats this
-with two more broken tools: a `PATH` that has no `checkov` on it, and a `checkov` that crashes
-mid-scan. All three leave `main.tf` byte-identical.
-
-## Step 5: Write the trigger as a design example
-
-The loop only runs when something re-invokes it. Here is a complete GitHub Actions workflow
-that would do that nightly. Read the comment at the top before anything else: this file is a
-**design example**. It is not installed under `.github/workflows/` in the companion
-repository, so nothing runs on its schedule there. To run it, copy it into
-`.github/workflows/` of a repository with the same layout and fire it by hand from the Actions
-tab, which is what `workflow_dispatch` is for.
-
-`file: lab/solution/trigger-workflow.example.yml`
-```
-# Design example. This file is NOT installed under .github/workflows/ in the
-# companion repository, so nothing runs on the schedule below. To try it, copy
-# it to .github/workflows/ in a repository with the same layout and run it by
-# hand from the Actions tab (workflow_dispatch). The schedule line shows what a
-# nightly trigger looks like; it only takes effect once the file is installed.
-#
-# Paths are relative to the companion repository root.
-name: m12-loop-trigger-example
-
-on:
-  workflow_dispatch: {}
-  schedule:
-    - cron: "0 2 * * *"
-
-permissions:
-  contents: read
-
-env:
-  LOOP: modules/module-12-loop-multiagent-economics/lab/solution/loop.sh
-  WORK: m12-work
-
-jobs:
-  run-loop:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.14.8
-          terraform_wrapper: false
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: install checkov, pinned
-        run: pip install checkov==3.3.30
-
-      # Cross-run state. The loop's state is its working copy. The first run copies
-      # the starter module; every later run restores the copy the previous run
-      # left behind, so run 2 sees the fix run 1 applied. restore-keys matches the
-      # newest cache whose key starts with the prefix; the exact key is unique per
-      # run so the post-job save always writes a fresh snapshot.
-      - name: restore the working copy from the previous run
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.WORK }}
-          key: m12-work-${{ github.run_id }}
-          restore-keys: |
-            m12-work-
-
-      - name: run the stopping-condition loop once
-        shell: bash
-        run: |
-          set +e
-          bash "$LOOP" "$GITHUB_WORKSPACE/$WORK"
-          code=$?
-          case "$code" in
-            0) echo "::notice::STOPPED, stopping condition met, nothing to do" ;;
-            1) echo "::notice::CONTINUE, fix applied, the next trigger re-checks" ;;
-            *) echo "::error::loop exited $code without a verdict, escalate to a human"
-               exit 1 ;;
-          esac
-```
-
-Four things to notice, each one a question the loop itself already answered:
-
-- `0 2 * * *`, every night at two in the morning, with `workflow_dispatch` alongside it, so you
-  can fire the loop by hand while testing, without waiting for 2am to prove it works.
-- The tool install steps pin exact versions. A nightly job that pulls `latest` will one day run
-  a different scanner from the one you tested.
-- The working copy is the loop's state, and `actions/cache` carries it from one run to the next.
-  Without that step, every night would start from the starter again, re-apply the fix, and
-  print `CONTINUE` forever.
-- Only exit code 2 turns the job red. `CONTINUE` and `STOPPED` are the loop doing its job. A
-  tool failure is the exception a human needs to hear about.
-
-Lint it the way the loop was tested, with a tool that fails on a real mistake:
+The evaluator sent the agent back four times. The first time it did so for a good reason: the
+agent's rerun of Checkov printed only a banner, with no summary line, so the transcript did not
+show the condition holding. The agent had to prove it. The next three times it sent the agent back
+because of the last four words of the condition. "Stop after 6 turns" was written as part of what
+must be true, the agent had gone past six turns proving the rest, and so the condition could never
+hold. This is the agent's own final message:
 
 ```
-actionlint lab/solution/trigger-workflow.example.yml && echo "actionlint clean"
+The goal can't be met now, and nothing I do will fix that. The repo side is done: both hardcoded
+keys are out of `main.tf` and `shipper.tf`, and checkov reports 0 failed checks. The goal also said
+to stop after 6 turns, and I've already gone past that. Every reply I make adds another turn, so
+the Stop hook will keep blocking.
 ```
 
-`[ Expected output ]`
+The documentation suggests writing a budget as an alternative, `or stop after 20 turns`, not as a
+requirement. The lesson is bigger than the wording: a model judge reads words, so every word in the
+condition is part of the gate.
+
+### Step 2: Check the result with something that is not a model
+
 ```
-actionlint clean
+cp -r ../lab/loop . && bash loop/verify.sh; echo "exit $?"
 ```
 
-## Step 6: Wire a FinOps gate
+```
+DONE: terraform validates, checkov reports no failed checks
+exit 0
+```
+
+The work was right. This run took 18 turns. Across three runs on the same day the model-judged loop
+took 18, 18 and 8 turns, and every one ended with a clean `verify.sh`.
+
+## Stage 3: A loop the pipeline judges
+
+### Step 1: Read the gate
+
+`file: lab/loop/hooks/stop-gate.sh`
+```
+#!/usr/bin/env bash
+# stop-gate.sh -- Stop hook. The agent may stop only when verify.sh says DONE.
+# Runs in Claude Code and Codex alike: both send JSON on stdin and treat exit 2 as
+# "do not stop; here is why" with the reason on stderr.
+set -uo pipefail
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+STATE="$ROOT/.loop/state.md"
+MAX_BLOCKS="${LOOP_MAX_BLOCKS:-5}"
+mkdir -p "$ROOT/.loop"
+cat >/dev/null   # the hook input; this gate decides from the repo, not from the transcript
+blocks=$(grep -c '^- blocked' "$STATE" 2>/dev/null || true); blocks=${blocks:-0}
+verdict=$("$ROOT/loop/verify.sh" 2>&1); code=$?
+stamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+case "$code" in
+  0) echo "- done $stamp: $(echo "$verdict" | head -1)" >> "$STATE"; exit 0 ;;
+  1) if [ "$blocks" -ge "$MAX_BLOCKS" ]; then
+       echo "- budget exhausted $stamp after $blocks blocks, escalate to a human" >> "$STATE"
+       echo "Loop budget exhausted after $blocks blocks. Stopping without DONE; a human must look." >&2
+       exit 0
+     fi
+     echo "- blocked $stamp: $(echo "$verdict" | grep -c 'FAILED for resource\|checkov:skip') finding(s)" >> "$STATE"
+     echo "verify.sh says the work is not done. Fix these, then stop again:" >&2
+     echo "$verdict" >&2
+     exit 2 ;;
+  *) echo "- no verdict $stamp: $(echo "$verdict" | tail -1)" >> "$STATE"
+     echo "verify.sh could not reach a verdict ($verdict). Stopping; a human must look." >&2
+     exit 0 ;;
+esac
+```
+
+The gate throws its input away and asks the repository. Exit 2 is how a Stop hook says "do not stop
+yet", and its standard error becomes the agent's next instruction. Every outcome is written to
+`.loop/state.md`.
+
+`file: lab/loop/hooks/guard-oracle.sh`
+```
+#!/usr/bin/env bash
+# guard-oracle.sh -- PreToolUse hook. The agent may not edit the thing that judges it.
+set -uo pipefail
+in=$(cat)
+path=$(printf '%s' "$in" | python3 -c 'import json,sys; d=json.load(sys.stdin); t=d.get("tool_input",{}); print(t.get("file_path") or t.get("path") or "")')
+case "$path" in
+  */loop/*|loop/*|*/.claude/*|.claude/*|*/.codex/*|.codex/*|*/.loop/*|.loop/*)
+    echo "Blocked: $path is part of the loop's verifier or state. Fix the infrastructure, not the judge." >&2
+    exit 2 ;;
+esac
+exit 0
+```
+
+### Step 2: Ask for a narrow fix, the way tickets are usually written
+
+```
+cd ../work
+claude -p "The log shipper's AWS key is hardcoded as the variable default in main.tf. Take it out of main.tf." \
+  --permission-mode acceptEdits --allowedTools "Read,Edit,Write,Bash(terraform *),Bash(checkov *),Bash(git diff*),Bash(ls*),Bash(cat *),Bash(grep *),Bash(loop/verify.sh*),Bash(bash loop/verify.sh*)" \
+  --output-format stream-json --verbose > run.jsonl
+python3 ../lab/loop/trace.py run.jsonl
+```
+
+```
+  1. Bash   ls -la && cat main.tf && git ls-files
+  2. Bash   cat shipper.tf .gitignore loop/verify.sh loop/hooks/*.sh .claude/settings.json
+  3. Edit   main.tf
+  4. Bash   grep -n AKIA main.tf; loop/verify.sh; echo "exit=$?"
+  5. Bash   loop/verify.sh
+     >> sent back to work (1): ["$CLAUDE_PROJECT_DIR"/loop/hooks/stop-gate.sh]: verify.sh says the work is not done. Fix these, the
+  6. Edit   shipper.tf
+  7. Bash   loop/verify.sh
+turns 9  stop-blocks 1  seconds 75  cost_usd 0.3020
+```
+
+The agent did exactly what it was asked, fixed `main.tf`, and tried to stop. The gate ran the
+scanner, found the second key, and sent the agent back with Checkov's own finding:
+
+```
+verify.sh says the work is not done. Fix these, then stop again:
+NOT DONE: checkov still reports failed checks:
+Check: CKV_SECRET_2: "AWS Access Key"
+	FAILED for resource: dd2709fa7eee829995341383d3a22fc137c72987
+	File: /shipper.tf:7-8
+```
+
+The agent fixed `shipper.tf` and the gate let it stop. Its final message says so plainly: "You'd
+scoped this to `main.tf`, but the stop hook wouldn't let me finish while `shipper.tf` still had a
+key."
+
+### Step 3: Read the loop's state
+
+```
+cat .loop/state.md
+```
+
+```
+- blocked 2026-10-25T12:39:27Z: 1 finding(s)
+- done 2026-10-25T12:39:58Z: DONE: terraform validates, checkov reports no failed checks
+```
+
+Across three runs the gated loop took 9, 7 and 11 turns, and the gate sent the agent back exactly
+once each time, for the same second key.
+
+## Stage 4: The same loop in Codex
+
+### Step 1: Run it before trusting the hook
+
+```
+cd ..
+cp -r lab/starter work-codex && bash lab/loop/install.sh work-codex
+cd work-codex && git init -q && git add -A && git commit -qm starter
+codex exec -s workspace-write "The log shipper's AWS key is hardcoded as the variable default in main.tf. Take it out of main.tf." < /dev/null
+```
+
+```
+Removed the hardcoded `log_shipper_key` default from [main.tf](main.tf). Terraform now requires
+the value to be supplied externally.
+
+`terraform fmt -check` passed.
+```
+
+```
+ls .loop; bash loop/verify.sh; echo "exit $?"
+```
+
+```
+ls: .loop: No such file or directory
+NOT DONE: checkov still reports failed checks:
+Check: CKV_SECRET_2: "AWS Access Key"
+	FAILED for resource: dd2709fa7eee829995341383d3a22fc137c72987
+	File: /shipper.tf:7-8
+exit 1
+```
+
+No state file means the gate never ran. Codex runs a project hook only after someone trusts it, and
+in `codex exec` an untrusted hook is skipped without a message. The agent reported done and the
+second key is still there.
+
+### Step 2: Trust the hooks
+
+Start Codex interactively in the same directory:
+
+```
+codex
+```
+
+```
+  Hooks need review
+  2 hooks are new or changed.
+  Hooks can run outside the sandbox after you trust them.
+› 1. Review hooks
+  2. Trust all and continue
+  3. Continue without trusting (hooks won't run)
+  enter confirm · esc skip
+```
+
+Choose **Review hooks**, read each hook's command and source, and press `t` to trust it. Codex
+records the trust against a hash of the hook, so a changed hook has to be trusted again. Quit with
+`Ctrl+C` twice.
+
+### Step 3: Run it again
+
+```
+git checkout -- .
+codex exec -s workspace-write "The log shipper's AWS key is hardcoded as the variable default in main.tf. Take it out of main.tf." < /dev/null
+cat .loop/state.md
+```
+
+```
+codex
+Removed the hardcoded default from [main.tf](main.tf). `log_shipper_key` is now a required input.
+Terraform formatting check passed.
+
+The key also appears in [shipper.tf](shipper.tf); that occurrence remains unchanged.
+hook: Stop
+hook: Stop Blocked
+codex
+I'll replace the hardcoded key in `shipper.tf` with the required variable, then rerun verification.
+...
+hook: Stop
+hook: Stop Completed
+```
+
+```
+- blocked 2026-10-25T12:42:34Z: 1 finding(s)
+- done 2026-10-25T12:42:56Z: DONE: terraform validates, checkov reports no failed checks
+```
+
+Codex noticed the second key, said it was leaving it, and tried to stop. The gate refused. One more
+detail is worth reading in the full capture: inside its sandbox the agent could not run
+`verify.sh` itself, because `terraform init` needs the network. The hook runs outside the sandbox,
+so the gate could.
+
+## Stage 5: Put the loop on a clock
+
+### Step 1: Start a scheduled loop on a clean copy
+
+From the module directory, make a copy of the solution, install the loop, and start Claude Code in
+it:
+
+```
+cd ..
+cp -r lab/solution work-sched && rm work-sched/trigger-workflow.example.yml
+bash lab/loop/install.sh work-sched
+cd work-sched && git init -q && git add -A && git commit -qm "nightly baseline, clean"
+claude --permission-mode acceptEdits --allowedTools "Read,Edit,Write,Bash(terraform *),Bash(checkov *),Bash(loop/verify.sh*),Bash(bash loop/verify.sh*),Bash(git diff*),Bash(cat *)"
+```
+
+In the session, start the loop:
+
+```
+/loop 2m Run loop/verify.sh and report its verdict in one line. If it prints NOT DONE, fix exactly what it names, run it again, and report what changed.
+```
+
+```
+I scheduled job `ed6edfeb` to run every 2 minutes (`*/2 * * * *`). The first run is at 6:21pm.
+Like all recurring jobs, it expires after 7 days, and you can cancel it sooner with CronDelete
+`ed6edfeb`.
+
+I also ran it once now. The verdict was DONE: terraform validates and checkov reports no failed checks.
+
+Runs until you close this session · For durable cloud-based loops, use /schedule
+```
+
+A first attempt in this build said "say so in one line and stop". Claude read "stop" as an
+instruction about the loop, not about one run, and never scheduled it. The per-run prompt describes
+one run. It never tells the loop to end.
+
+### Step 2: Drift, the way the opening story happened
+
+In a second terminal, in the same `work-sched` directory, commit what the contractor did:
+
+```
+sed -i.bak 's#access_key_id: ${var.shipper_access_key_id}#access_key_id: AKIAZ7Q4R2M8N5T1W3Y6#' shipper.tf && rm shipper.tf.bak
+git commit -qam "unblock deploy: inline the shipper key for now"
+```
+
+Within two minutes the next run fires on its own:
+
+```
+Verdict: NOT DONE at first, now DONE. Checkov flagged a hardcoded AWS access key (CKV_SECRET_2) at `shipper.tf:15`.
+
+**What changed:** A new commit, `101d3dc` ("unblock deploy: inline the shipper key for now"), had put the key `AKIAZ7Q4R2M8N5T1W3Y6` directly into the rendered config. I replaced it with `${var.shipper_access_key_id}`, which reads the sensitive variable already declared in that file. The file's own comment says the key should arrive as `TF_VAR_shipper_access_key_id`. Re-running `loop/verify.sh` prints DONE. The fix is not committed yet.
+
+**You still need to deal with the leaked key:**
+- **Rotate it.** It's still in commit `101d3dc`, so removing it from the working copy doesn't make it safe if that commit was ever pushed or shared.
+- **History:** if it hasn't been pushed, you could drop or amend that commit. I haven't rewritten any git history.
+
+The 2-minute job `ed6edfeb` is still running.
+```
+
+The next run, two minutes later, finds nothing to do:
+
+```
+DONE: terraform validates and checkov reports no failed checks, so nothing changed this run. The key from commit `101d3dc` still needs rotating.
+```
+
+Cancel the loop when you have seen enough, by asking: `cancel the verify loop`. Closing the session
+ends it too. That is the limit of `/loop`. It is the right tool for watching while you work and the
+wrong one for a control that must run on the nights nobody is at a desk.
+
+### Step 3: The durable version, as a design example
+
+`lab/solution/trigger-workflow.example.yml` runs the same gated session nightly in GitHub Actions.
+It is not installed in the companion repository, so nothing runs on its schedule. It authenticates
+with a token from `claude setup-token`, so it uses your subscription, not an API key. It never
+pushes. It decides the job's colour from `.loop/state.md`, not from anything the agent said, and
+uploads the diff for a human to open as a pull request. Claude Code routines and Desktop scheduled
+tasks, and Codex automations, are the hosted alternatives to the same idea.
+
+## Stage 6: What it cost, and a FinOps gate
+
+### Step 1: Read every run's cost from its own event stream
+
+The last line of each trace is the runtime's own accounting:
+
+| Judge | Run | Turns | Sent back | Seconds | Cost (USD) |
+|---|---|---|---|---|---|
+| /goal evaluator | 1 | 18 | 4 | 113 | 0.40 |
+| /goal evaluator | 2 | 18 | 8 | 131 | 0.38 |
+| /goal evaluator | 3 | 8 | 0 | 54 | 0.22 |
+| Stop gate | 1 | 9 | 1 | 75 | 0.30 |
+| Stop gate | 2 | 7 | 1 | 41 | 0.23 |
+| Stop gate | 3 | 11 | 1 | 64 | 0.26 |
+
+All six runs were made on 25 October 2026 with the same model and the same starter, and all six
+ended with a clean `verify.sh`. Three runs each is enough to see a pattern, not to prove one. Run
+your own and compare.
+
+### Step 2: Wire a FinOps gate
+
 
 The pipeline in Module 9 ran Trivy, Checkov, and OPA against the plan before anything applied.
-This step adds one more deterministic check to that same family: a FinOps gate. It reads
+This stage adds one more deterministic check to that same family: a FinOps gate. It reads
 `terraform show -json` directly and fails on three things: too many resources, missing required
 tags, and an instance type outside an allowed list. No Infracost API key, no account, no live
 pricing lookup. It checks policy against a plan you already have on disk, not cost.
@@ -629,54 +796,54 @@ dimensions were already proven against the fixtures above.
 
 #### Exercise
 
-Write the two-line escalation note this module's reading asked for:
+Write the two-line escalation note this module's reading asks for:
 
-- If this loop ran every night for a month and never once printed `STOPPED`, who finds out, and
-  how fast?
-- What's the one thing that would tell you the stopping condition itself is broken, not just
-  slow?
+- If this loop ran every night for a month and `.loop/state.md` never once ended with `done`,
+  who finds out, and how fast?
+- What one line in `.loop/state.md` would tell you the verifier itself is broken, not just the
+  infrastructure?
 
 There's no wrong answer. Keep the note, the capstone asks you to compare it against your own
 answer from Project 01's exercise.
 
 ## Validation
 
-Run the full check yourself, all three loop outcomes, the three tool-failure runs, the trigger
-config, and the FinOps gate:
+`lab/run.sh` checks everything above that does not need an agent, for real:
 
 ```
-cd modules/module-12-loop-multiagent-economics/lab
+cd lab
 ./run.sh
 ```
 
-`run.sh` checks:
+- The verifier reports both keys on the starter, passes the solution, refuses a `checkov:skip`
+  suppression, and returns no verdict on a broken provider block
+- The Stop gate blocks the starter with exit 2 and records it, lets the solution stop, releases at
+  the block budget as "budget exhausted", and records "no verdict" without ever writing "done"
+- The guard blocks edits to the verifier, both hook configs and the loop state, and allows `main.tf`
+- `trace.py` reads a captured run; the FinOps gate and its unit tests pass; the nightly workflow
+  example is valid and lints clean
+- With `M12_LIVE_AGENT=1`, one real gated Claude Code session must end with `done` in
+  `.loop/state.md`, and an independent `verify.sh` must agree
 
-- The trigger config is a real, valid cron expression with `workflow_dispatch` alongside it,
-  its `LOOP` path resolves to a file in this repository, and `actionlint` passes it (skipped
-  with a message if `actionlint` is not installed)
-- Run 1 prints `CONTINUE` and applies the real fix
-- Run 2, same working copy, prints `STOPPED`
-- Run 3, same working copy again, is still `STOPPED`, proving the loop is idempotent
-- With no `checkov` on `PATH`, with a broken provider block, and with a `checkov` that
-  crashes: exit code 2, no verdict printed, `main.tf` byte-identical before and after
-- The FinOps gate rejects `plan-over-budget.json`, accepts `plan-in-budget.json`, refuses
-  `plan-empty.json` with exit 2, and reports the child-module violation in `plan-nested.json`
-- The gate's 15 unit tests pass
+## Clean up
+
+```
+cd modules/module-12-loop-multiagent-economics
+rm -rf work work-goal work-codex work-sched
+```
 
 ## Summary
 
 What you built:
 
-- A stopping-condition script with exactly one checkable question: does `checkov` exit 0
-- A real fix, applied automatically, not by hand, and only after every tool it depends on has
-  run to completion
-- Three real runs proving three states: continue-and-fix, stop, stay stopped, and three more
-  proving a broken tool leaves `main.tf` untouched
-- A GitHub Actions `schedule:` workflow, pinned, linted, carrying its state between runs, kept
-  as a design example that runs on `workflow_dispatch`
-- A FinOps gate that fails a plan on resource count, missing tags, or a disallowed instance
-  type, refuses a plan it cannot read, walks nested modules, and has its own tests, no paid API
+- A three-answer stopping condition, and a Stop gate and guard that make it the only thing that
+  can end the loop, in Claude Code and in Codex
+- Real runs of a model-judged and a gate-judged loop, with the evaluator's reasons and the gate's
+  findings side by side
+- A scheduled loop that caught a drifted commit on its own and fixed it
+- A cost table for six runs, read from the runtime's own records, and a FinOps gate for plans
 
-That's the loop layer, the third one from Module 1, closed. Every earlier module built context
-or harness. This project is the one that finally runs one of them on its own, and knows both
-when to quit and when it has no business deciding at all.
+What to take away: the agent can do the work, and it can loop until the work is done. For
+infrastructure, the thing that says "done" should be the pipeline, not the transcript.
+
+**Found this project useful?** A short review on the course page helps other engineers find it.

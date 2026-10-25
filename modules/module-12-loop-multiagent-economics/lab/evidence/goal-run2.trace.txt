@@ -1,0 +1,18 @@
+  1. Bash   pwd; ls -la; cat main.tf; ls *.tf; which checkov
+  2. Bash   cat shipper.tf .gitignore; checkov -d . --compact --quiet 2>&1 | tail -40
+  3. Write  /Users/gshah/work/courses/310-packt/modules/module-12-loop-multiagent-economics/lab/work-g
+  4. Write  /Users/gshah/work/courses/310-packt/modules/module-12-loop-multiagent-economics/lab/work-g
+  5. Bash   checkov -d . --compact --quiet 2>&1 | tail -20; echo "exit=$?"; grep -rn AKIA --include=*.
+  6. Bash   checkov -d . --compact 2>&1 | tail -20; grep -rn AKIA --include=*.tf . || echo "no AKIA in
+  7. Bash   checkov -d . --compact -o cli 2>&1 | grep -E "Passed|Failed|Check:" ; echo "---"; grep -rn
+  8. Bash   checkov -d . -o json --quiet 2>/dev/null | head -c 600; echo; checkov -d . --quiet >/dev/n
+  9. Bash   checkov -d . -o json
+     >> sent back to work (1): [The hardcoded AWS key for the log shipper is out of main.tf, and checkov reports no failed checks f
+     >> sent back to work (2): [The hardcoded AWS key for the log shipper is out of main.tf, and checkov reports no failed checks f
+     >> sent back to work (3): [The hardcoded AWS key for the log shipper is out of main.tf, and checkov reports no failed checks f
+     >> sent back to work (4): [The hardcoded AWS key for the log shipper is out of main.tf, and checkov reports no failed checks f
+     >> sent back to work (5): [The hardcoded AWS key for the log shipper is out of main.tf, and checkov reports no failed checks f
+     >> sent back to work (6): [The hardcoded AWS key for the log shipper is out of main.tf, and checkov reports no failed checks f
+     >> sent back to work (7): [The hardcoded AWS key for the log shipper is out of main.tf, and checkov reports no failed checks f
+     >> sent back to work (8): [The hardcoded AWS key for the log shipper is out of main.tf, and checkov reports no failed checks f
+turns 18  stop-blocks 8  seconds 131  cost_usd 0.3755

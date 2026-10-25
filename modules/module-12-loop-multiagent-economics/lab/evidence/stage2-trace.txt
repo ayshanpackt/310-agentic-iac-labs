@@ -1,0 +1,18 @@
+  1. Bash   pwd; ls -la; cat main.tf; ls *.tf; which checkov
+  2. Bash   cat shipper.tf .gitignore; checkov -d . --compact 2>&1 | tail -40
+  3. Bash   cat > main.tf <<'EOF'
+  4. Read   main.tf
+  5. Read   shipper.tf
+  6. Edit   main.tf
+  7. Edit   shipper.tf
+  8. Edit   shipper.tf
+  9. Bash   checkov -d . --compact 2>&1 | grep -E "Passed|Failed|FAILED"; grep -rn AKIA . --exclude-di
+ 10. Bash   checkov -d . --compact
+     >> sent back to work (1): [The hardcoded AWS key for the log shipper is out of main.tf, and checkov reports no failed checks f
+ 11. Bash   checkov -d . -o json
+ 12. Bash   grep -rn AKIA . --exclude-dir=.git
+     >> sent back to work (2): [The hardcoded AWS key for the log shipper is out of main.tf, and checkov reports no failed checks f
+ 13. Bash   checkov -d . --framework terraform secrets -o json
+     >> sent back to work (3): [The hardcoded AWS key for the log shipper is out of main.tf, and checkov reports no failed checks f
+     >> sent back to work (4): [The hardcoded AWS key for the log shipper is out of main.tf, and checkov reports no failed checks f
+turns 18  stop-blocks 4  seconds 113  cost_usd 0.3981

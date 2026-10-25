@@ -1,0 +1,11 @@
+{
+  "hooks": {
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "bash \"$(git rev-parse --show-toplevel)/loop/hooks/stop-gate.sh\"", "timeout": 300 } ] }
+    ],
+    "PreToolUse": [
+      { "matcher": "apply_patch|Edit|Write",
+        "hooks": [ { "type": "command", "command": "bash \"$(git rev-parse --show-toplevel)/loop/hooks/guard-oracle.sh\"" } ] }
+    ]
+  }
+}

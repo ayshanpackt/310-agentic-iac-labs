@@ -1,0 +1,2 @@
+DONE: terraform validates, checkov reports no failed checks
+verify exit 0

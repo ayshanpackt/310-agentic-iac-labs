@@ -1,0 +1,2 @@
+- blocked 2026-10-25T12:42:34Z: 1 finding(s)
+- done 2026-10-25T12:42:56Z: DONE: terraform validates, checkov reports no failed checks
